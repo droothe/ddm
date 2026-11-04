@@ -83,7 +83,7 @@ function SegmentVisualizer({ d }: { d: Download }) {
     <div className="mt-4 border-t border-border pt-4">
       <div className="flex justify-between text-xs text-muted-foreground mb-2">
         <span className="uppercase tracking-wider">HTTP Range segments</span>
-        <span className="font-mono">{hover !== null ? `Chunk ${hover + 1}: ${((d.chunks[hover].done / d.chunks[hover].size) * 100).toFixed(1)}%` : "Hover a chunk"}</span>
+        <span className="font-mono">{hover !== null && d.chunks[hover] ? `Chunk ${hover + 1}: ${((d.chunks[hover]!.done / d.chunks[hover]!.size) * 100).toFixed(1)}%` : "Hover a chunk"}</span>
       </div>
       <div className="flex gap-1 h-6">
         {d.chunks.map((c, i) => {

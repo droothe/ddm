@@ -27,7 +27,7 @@ export interface Settings {
 const MB = 1024 * 1024;
 
 export function detectCategory(name: string): Category {
-  const ext = name.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+  const ext = (name.split("?")[0] ?? "").split(".").pop()?.toLowerCase() ?? "";
   if (["mp4", "mkv", "webm", "avi", "mov", "m3u8"].includes(ext)) return "video";
   if (["zip", "rar", "7z", "tar", "gz", "iso"].includes(ext)) return "archive";
   if (["exe", "msi", "dmg", "apk", "deb", "appimage"].includes(ext)) return "executable";
