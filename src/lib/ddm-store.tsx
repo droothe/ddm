@@ -49,7 +49,7 @@ function makeChunks(size: number, threads: number, ratio = 0): Chunk[] {
   const base = Math.floor(size / threads);
   return Array.from({ length: threads }, (_, i) => {
     const s = i === threads - 1 ? size - base * (threads - 1) : base;
-    const jitter = ratio === 0 ? 0 : Math.min(1, Math.max(0, ratio + (Math.random() - 0.5) * 0.3));
+    const jitter = ratio === 0 ? 0 : Math.min(1, Math.max(0, ratio + Math.sin(i * 2.3 + size) * 0.15));
     return { size: s, done: Math.floor(s * (ratio >= 1 ? 1 : jitter)) };
   });
 }
@@ -58,8 +58,9 @@ let idSeq = 0;
 const uid = () => `dl-${Date.now().toString(36)}-${idSeq++}`;
 
 function seed(): Download[] {
+  let n = 0;
   const mk = (name: string, sizeMB: number, status: Status, threads: number, ratio: number): Download => ({
-    id: uid(), name, url: `https://cdn.droothe.dev/files/${name}`, size: sizeMB * MB,
+    id: `seed-${n++}`, name, url: `https://cdn.droothe.dev/files/${name}`, size: sizeMB * MB,
     category: detectCategory(name), status, threads, chunks: makeChunks(sizeMB * MB, threads, ratio),
     speed: 0, path: "/Downloads/Droothe",
   });
