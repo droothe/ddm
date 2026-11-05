@@ -1,30 +1,66 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  cancelDownload,
+  extractMediaUrl,
+  listenForExternalDownloads,
+  listenForProgress,
+  openDownloadFolder,
+  pauseDownload,
+  probeDownload,
+  resumeDownload,
+  startDownload,
+  isTauriRuntime,
+  setGlobalSpeedLimit,
+  type DownloadMetadata,
+  type DirectMedia,
+  type EngineProgress,
+} from "./downloadEngine";
+import { useShareIntent } from "@/hooks/useShareIntent";
 
-export type Status = "downloading" | "paused" | "completed" | "merging" | "error" | "queued";
+export type Status =
+  "downloading" | "paused" | "completed" | "merging" | "error" | "queued" | "cancelled";
 export type Category = "video" | "archive" | "executable" | "audio" | "other";
 
-export interface Chunk { size: number; done: number }
-export interface Download {
+export interface ThreadSegment {
+  start: number;
+  end: number;
+  size: number;
+  done: number;
+}
+
+export interface DownloadItem {
   id: string;
   name: string;
   url: string;
-  size: number; // bytes
+  size: number;
   category: Category;
   status: Status;
   threads: number;
-  chunks: Chunk[];
-  speed: number; // bytes/s
+  chunks: ThreadSegment[];
+  speed: number;
   path: string;
-  mergeTicks?: number;
+  supportsRanges: boolean;
+  prepared: boolean;
+  errorMessage?: string;
 }
+
+export type Download = DownloadItem;
+
 export interface Settings {
   defaultDir: string;
   maxConcurrent: number;
   defaultThreads: number;
-  speedLimitMB: number; // 0 = unlimited
+  speedLimitMB: number;
 }
-
-const MB = 1024 * 1024;
 
 export function detectCategory(name: string): Category {
   const ext = (name.split("?")[0] ?? "").split(".").pop()?.toLowerCase() ?? "";
@@ -37,49 +73,41 @@ export function detectCategory(name: string): Category {
 
 export function fileNameFromUrl(url: string) {
   try {
-    const u = new URL(url);
-    const last = u.pathname.split("/").filter(Boolean).pop();
-    return decodeURIComponent(last || u.hostname);
+    const parsed = new URL(url);
+    const last = parsed.pathname.split("/").filter(Boolean).pop();
+    return decodeURIComponent(last || parsed.hostname);
   } catch {
     return url.split("/").pop() || "download.bin";
   }
 }
 
-function makeChunks(size: number, threads: number, ratio = 0): Chunk[] {
-  const base = Math.floor(size / threads);
-  return Array.from({ length: threads }, (_, i) => {
-    const s = i === threads - 1 ? size - base * (threads - 1) : base;
-    const jitter = ratio === 0 ? 0 : Math.min(1, Math.max(0, ratio + Math.sin(i * 2.3 + size) * 0.15));
-    return { size: s, done: Math.floor(s * (ratio >= 1 ? 1 : jitter)) };
+export function createThreadSegments(size: number, threads: number): ThreadSegment[] {
+  if (!Number.isSafeInteger(size) || size <= 0)
+    throw new Error("The server did not provide a valid file size.");
+  if (!Number.isInteger(threads) || threads < 1 || threads > 16) {
+    throw new Error("Thread count must be between 1 and 16.");
+  }
+
+  const count = Math.min(size, threads);
+  const baseSize = Math.floor(size / count);
+  let start = 0;
+  return Array.from({ length: count }, (_, index) => {
+    const segmentSize = index === count - 1 ? size - start : baseSize;
+    const segment = { start, end: start + segmentSize - 1, size: segmentSize, done: 0 };
+    start += segmentSize;
+    return segment;
   });
 }
 
-let idSeq = 0;
-const uid = () => `dl-${Date.now().toString(36)}-${idSeq++}`;
+export const bytesDone = (download: DownloadItem) =>
+  download.chunks.reduce((total, chunk) => total + chunk.done, 0);
+export const progress = (download: DownloadItem) =>
+  download.size > 0 ? Math.min(1, bytesDone(download) / download.size) : 0;
 
-function seed(): Download[] {
-  let n = 0;
-  const mk = (name: string, sizeMB: number, status: Status, threads: number, ratio: number): Download => ({
-    id: `seed-${n++}`, name, url: `https://cdn.droothe.dev/files/${name}`, size: sizeMB * MB,
-    category: detectCategory(name), status, threads, chunks: makeChunks(sizeMB * MB, threads, ratio),
-    speed: 0, path: "/Downloads/Droothe",
-  });
-  return [
-    mk("Droothe_Studio_Setup_v3.2.exe", 412, "downloading", 8, 0.42),
-    mk("Cinematic_Reel_4K_HDR.mp4", 2860, "downloading", 16, 0.18),
-    mk("Asset_Pack_Vol7.zip", 1240, "paused", 8, 0.63),
-    mk("Ambient_Sessions_Lossless.flac", 186, "completed", 4, 1),
-    mk("Nightly_Build_Linux.tar.gz", 734, "error", 8, 0.27),
-  ];
-}
-
-export const bytesDone = (d: Download) => d.chunks.reduce((a, c) => a + c.done, 0);
-export const progress = (d: Download) => (d.size ? bytesDone(d) / d.size : 0);
-
-interface Ctx {
-  downloads: Download[];
+interface DDMContextValue {
+  downloads: DownloadItem[];
   settings: Settings;
-  setSettings: (s: Partial<Settings>) => void;
+  setSettings: (settings: Partial<Settings>) => void;
   add: (url: string, threads: number, path: string) => void;
   pause: (id: string) => void;
   resume: (id: string) => void;
@@ -87,117 +115,334 @@ interface Ctx {
   remove: (id: string) => void;
   pauseAll: () => void;
   resumeAll: () => void;
+  openFolder: (id: string) => Promise<void>;
   stats: { down: number; up: number; threads: number; active: number };
-  extension: "ready" | "listening";
+  extension: "listening" | "unavailable";
+  engine: "browser" | "tauri";
+  externalUrl: string | null;
+  sharedMedia: DirectMedia | null;
+  shareError: string | null;
+  resolveSharedMedia: (url: string) => Promise<void>;
+  clearExternalUrl: () => void;
 }
 
-const DDMContext = createContext<Ctx | null>(null);
+const DDMContext = createContext<DDMContextValue | null>(null);
+
+const INITIAL_SETTINGS: Settings = {
+  defaultDir: "Downloads/Droothe",
+  maxConcurrent: 3,
+  defaultThreads: 8,
+  speedLimitMB: 0,
+};
+
+let idSequence = 0;
+const makeId = () =>
+  `dl-${Date.now().toString(36)}-${globalThis.crypto?.randomUUID?.() ?? idSequence++}`;
+const getErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : "The download failed for an unknown reason.";
 
 export function DDMProvider({ children }: { children: ReactNode }) {
-  const [downloads, setDownloads] = useState<Download[]>(seed);
-  const [settings, setSettingsState] = useState<Settings>({
-    defaultDir: "/Downloads/Droothe", maxConcurrent: 3, defaultThreads: 8, speedLimitMB: 0,
-  });
-  const [up, setUp] = useState(0);
-  const [extension, setExtension] = useState<"ready" | "listening">("listening");
+  const [downloads, setDownloads] = useState<DownloadItem[]>([]);
+  const [settings, setSettingsState] = useState<Settings>(INITIAL_SETTINGS);
+  const [externalUrl, setExternalUrl] = useState<string | null>(null);
+  const [sharedMedia, setSharedMedia] = useState<DirectMedia | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [extension, setExtension] = useState<"listening" | "unavailable">("unavailable");
+  const [engine, setEngine] = useState<"browser" | "tauri">("browser");
+  const starting = useRef(new Set<string>());
+  const started = useRef(new Set<string>());
+  const resuming = useRef(new Set<string>());
+  const retrying = useRef(new Set<string>());
 
-  useEffect(() => {
-    const t = setInterval(() => setExtension((e) => (e === "listening" ? "ready" : "listening")), 6000);
-    return () => clearInterval(t);
+  const updateDownload = useCallback((id: string, update: Partial<DownloadItem>) => {
+    setDownloads((items) => items.map((item) => (item.id === id ? { ...item, ...update } : item)));
   }, []);
 
-  // Simulation engine
+  const resolveSharedMedia = useCallback(async (url: string) => {
+    setSharedMedia(null);
+    setShareError(null);
+    try {
+      setSharedMedia(await extractMediaUrl(url));
+    } catch (error) {
+      setShareError(getErrorMessage(error));
+    }
+  }, []);
+
+  const receiveSharedUrl = useCallback((url: string) => {
+    setExternalUrl(url);
+    setSharedMedia(null);
+    setShareError(null);
+  }, []);
+
+  useShareIntent(receiveSharedUrl);
+
   useEffect(() => {
-    const TICK = 500;
-    const t = setInterval(() => {
-      setDownloads((list) => {
-        let activeCount = 0;
-        return list.map((d) => {
-          if (d.status === "queued" && activeCount < settings.maxConcurrent) {
-            d = { ...d, status: "downloading" };
-          }
-          if (d.status === "merging") {
-            const m = (d.mergeTicks ?? 0) + 1;
-            return m >= 4 ? { ...d, status: "completed", speed: 0, mergeTicks: m } : { ...d, mergeTicks: m };
-          }
-          if (d.status !== "downloading") return d.speed ? { ...d, speed: 0 } : d;
-          activeCount++;
-          if (activeCount > settings.maxConcurrent) return { ...d, status: "queued", speed: 0 };
-          const limitPerDl = settings.speedLimitMB > 0 ? (settings.speedLimitMB * MB) / settings.maxConcurrent : Infinity;
-          const perThread = (1.2 + Math.random() * 2.6) * MB;
-          let total = 0;
-          const chunks = d.chunks.map((c) => {
-            if (c.done >= c.size) return c;
-            const want = Math.min(perThread * (TICK / 1000) * (0.5 + Math.random()), limitPerDl * (TICK / 1000) / d.threads);
-            const add = Math.min(c.size - c.done, want);
-            total += add;
-            return { ...c, done: c.done + add };
+    setGlobalSpeedLimit(settings.speedLimitMB);
+  }, [settings.speedLimitMB]);
+
+  useEffect(() => {
+    setEngine(isTauriRuntime() ? "tauri" : "browser");
+    let disposed = false;
+    let removeProgressListener = () => {};
+    let removeExternalListener = () => {};
+
+    void Promise.all([
+      listenForProgress((event) => {
+        setDownloads((items) =>
+          items.map((item) => (item.id === event.id ? applyProgress(item, event) : item)),
+        );
+      }),
+      listenForExternalDownloads((url) => setExternalUrl(url)),
+    ])
+      .then(([stopProgress, stopExternal]) => {
+        if (disposed) {
+          stopProgress();
+          stopExternal();
+          return;
+        }
+        removeProgressListener = stopProgress;
+        removeExternalListener = stopExternal;
+        setExtension("listening");
+      })
+      .catch((error: unknown) =>
+        console.error("Could not initialize download event listeners.", error),
+      );
+
+    return () => {
+      disposed = true;
+      removeProgressListener();
+      removeExternalListener();
+    };
+  }, []);
+
+  useEffect(() => {
+    const activeCount = downloads.filter((item) => item.status === "downloading").length;
+    let slots = Math.max(0, settings.maxConcurrent - activeCount);
+    for (const item of downloads) {
+      if (slots === 0) break;
+      if (item.status !== "queued" || !item.prepared || starting.current.has(item.id)) continue;
+
+      slots -= 1;
+      starting.current.add(item.id);
+      updateDownload(item.id, { status: "downloading", speed: 0, errorMessage: "" });
+      const shouldStart = retrying.current.delete(item.id) || !started.current.has(item.id);
+      if (shouldStart) started.current.add(item.id);
+      resuming.current.delete(item.id);
+      const operation = shouldStart ? startDownload(item) : resumeDownload(item.id);
+      void operation
+        .catch((error: unknown) => {
+          updateDownload(item.id, {
+            status: "error",
+            speed: 0,
+            errorMessage: getErrorMessage(error),
           });
-          const finished = chunks.every((c) => c.done >= c.size);
-          return {
-            ...d, chunks, speed: total / (TICK / 1000),
-            status: finished ? "merging" : "downloading", mergeTicks: 0,
-          };
+        })
+        .finally(() => starting.current.delete(item.id));
+    }
+  }, [downloads, settings.maxConcurrent, updateDownload]);
+
+  const add = useCallback(
+    (url: string, threads: number, path: string) => {
+      const id = makeId();
+      const initialName = fileNameFromUrl(url);
+      const item: DownloadItem = {
+        id,
+        name: initialName,
+        url,
+        size: 0,
+        category: detectCategory(initialName),
+        status: "queued",
+        threads,
+        chunks: [],
+        speed: 0,
+        path,
+        supportsRanges: false,
+        prepared: false,
+      };
+      setDownloads((items) => [item, ...items]);
+
+      void probeDownload(url, threads)
+        .then((metadata) => {
+          const segments = createThreadSegments(
+            metadata.size,
+            metadata.supportsRanges ? threads : 1,
+          );
+          updateDownload(id, {
+            name: metadata.name,
+            size: metadata.size,
+            supportsRanges: metadata.supportsRanges,
+            chunks: segments,
+            prepared: true,
+            category: detectCategory(metadata.name),
+          });
+        })
+        .catch((error: unknown) => {
+          updateDownload(id, { status: "error", errorMessage: getErrorMessage(error), speed: 0 });
         });
+    },
+    [updateDownload],
+  );
+
+  const pause = useCallback(
+    (id: string) => {
+      const item = downloads.find((download) => download.id === id);
+      if (!item || (item.status !== "downloading" && item.status !== "queued")) return;
+      updateDownload(id, { status: "paused", speed: 0 });
+      if (item.status === "downloading") {
+        void pauseDownload(id).catch((error: unknown) => {
+          updateDownload(id, { status: "error", errorMessage: getErrorMessage(error) });
+        });
+      }
+    },
+    [downloads, updateDownload],
+  );
+
+  const resume = useCallback(
+    (id: string) => {
+      const item = downloads.find((download) => download.id === id);
+      if (!item || (item.status !== "paused" && item.status !== "error")) return;
+      if (!item.prepared) return;
+      resuming.current.add(id);
+      if (item.status === "error" && isTauriRuntime()) retrying.current.add(id);
+      updateDownload(id, { status: "queued", speed: 0, errorMessage: "" });
+    },
+    [downloads, updateDownload],
+  );
+
+  const cancel = useCallback(
+    (id: string) => {
+      updateDownload(id, { status: "cancelled", speed: 0 });
+      void cancelDownload(id).catch((error: unknown) => {
+        updateDownload(id, { errorMessage: getErrorMessage(error) });
       });
-      setUp(() => (0.05 + Math.random() * 0.3) * MB);
-    }, TICK);
-    return () => clearInterval(t);
-  }, [settings.maxConcurrent, settings.speedLimitMB]);
+    },
+    [updateDownload],
+  );
 
-  const patch = (id: string, fn: (d: Download) => Download) =>
-    setDownloads((l) => l.map((d) => (d.id === id ? fn(d) : d)));
+  const remove = useCallback(
+    (id: string) => {
+      starting.current.delete(id);
+      started.current.delete(id);
+      resuming.current.delete(id);
+      retrying.current.delete(id);
+      const item = downloads.find((download) => download.id === id);
+      if (item && item.status !== "completed" && item.status !== "cancelled") {
+        void cancelDownload(id).catch((error: unknown) =>
+          console.error("Could not stop removed download.", error),
+        );
+      }
+      setDownloads((items) => items.filter((download) => download.id !== id));
+    },
+    [downloads],
+  );
 
-  const value = useMemo<Ctx>(() => {
-    const active = downloads.filter((d) => d.status === "downloading");
+  const pauseAll = useCallback(() => {
+    for (const item of downloads) {
+      if (item.status === "downloading" || item.status === "queued") pause(item.id);
+    }
+  }, [downloads, pause]);
+
+  const resumeAll = useCallback(() => {
+    for (const item of downloads) {
+      if (item.status === "paused") resume(item.id);
+    }
+  }, [downloads, resume]);
+
+  const openFolder = useCallback(
+    async (id: string) => {
+      const item = downloads.find((download) => download.id === id);
+      if (!item) throw new Error("Download not found.");
+      await openDownloadFolder(item.path, item.name);
+    },
+    [downloads],
+  );
+
+  const value = useMemo<DDMContextValue>(() => {
+    const active = downloads.filter((item) => item.status === "downloading");
     return {
       downloads,
       settings,
-      extension,
-      setSettings: (s) => setSettingsState((p) => ({ ...p, ...s })),
-      add: (url, threads, path) => {
-        const name = fileNameFromUrl(url);
-        const size = Math.round((80 + Math.random() * 1800) * MB);
-        setDownloads((l) => [
-          { id: uid(), name, url, size, category: detectCategory(name), status: "downloading", threads,
-            chunks: makeChunks(size, threads), speed: 0, path },
-          ...l,
-        ]);
-      },
-      pause: (id) => patch(id, (d) => (d.status === "downloading" || d.status === "queued" ? { ...d, status: "paused", speed: 0 } : d)),
-      resume: (id) => patch(id, (d) => (d.status === "paused" || d.status === "error" ? { ...d, status: "downloading" } : d)),
-      cancel: (id) => patch(id, (d) => ({ ...d, status: "error", speed: 0 })),
-      remove: (id) => setDownloads((l) => l.filter((d) => d.id !== id)),
-      pauseAll: () => setDownloads((l) => l.map((d) => (d.status === "downloading" || d.status === "queued" ? { ...d, status: "paused", speed: 0 } : d))),
-      resumeAll: () => setDownloads((l) => l.map((d) => (d.status === "paused" ? { ...d, status: "downloading" } : d))),
+      setSettings: (update) => setSettingsState((current) => ({ ...current, ...update })),
+      add,
+      pause,
+      resume,
+      cancel,
+      remove,
+      pauseAll,
+      resumeAll,
+      openFolder,
       stats: {
-        down: active.reduce((a, d) => a + d.speed, 0),
-        up: active.length ? up : 0,
-        threads: active.reduce((a, d) => a + d.chunks.filter((c) => c.done < c.size).length, 0),
+        down: active.reduce((total, item) => total + item.speed, 0),
+        up: 0,
+        threads: active.reduce(
+          (total, item) => total + item.chunks.filter((chunk) => chunk.done < chunk.size).length,
+          0,
+        ),
         active: active.length,
       },
+      extension,
+      engine,
+      externalUrl,
+      sharedMedia,
+      shareError,
+      resolveSharedMedia,
+      clearExternalUrl: () => {
+        setExternalUrl(null);
+        setSharedMedia(null);
+        setShareError(null);
+      },
     };
-  }, [downloads, settings, up, extension]);
+  }, [
+    add,
+    cancel,
+    downloads,
+    engine,
+    extension,
+    externalUrl,
+    resolveSharedMedia,
+    shareError,
+    sharedMedia,
+    openFolder,
+    pause,
+    pauseAll,
+    remove,
+    resume,
+    resumeAll,
+    settings,
+  ]);
 
   return <DDMContext.Provider value={value}>{children}</DDMContext.Provider>;
 }
 
-export function useDDM() {
-  const c = useContext(DDMContext);
-  if (!c) throw new Error("useDDM must be used inside DDMProvider");
-  return c;
+function applyProgress(item: DownloadItem, event: EngineProgress): DownloadItem {
+  return {
+    ...item,
+    status: event.status ?? item.status,
+    size: event.size && event.size > 0 ? event.size : item.size,
+    speed: event.speed ?? 0,
+    chunks: event.chunks?.length ? event.chunks : item.chunks,
+    ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
+  };
 }
 
-export function fmtBytes(b: number) {
-  if (b >= 1024 * MB) return `${(b / (1024 * MB)).toFixed(2)} GB`;
-  if (b >= MB) return `${(b / MB).toFixed(1)} MB`;
-  return `${(b / 1024).toFixed(0)} KB`;
+export function useDDM() {
+  const context = useContext(DDMContext);
+  if (!context) throw new Error("useDDM must be used inside DDMProvider");
+  return context;
 }
-export const fmtSpeed = (b: number) => `${(b / MB).toFixed(2)} MB/s`;
+
+export function fmtBytes(bytes: number) {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}
+export const fmtSpeed = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(2)} MB/s`;
 export function fmtEta(remaining: number, speed: number) {
   if (!speed) return "—";
-  const s = Math.round(remaining / speed);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
-  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  const seconds = Math.round(remaining / speed);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
+
+export type { DirectMedia, DownloadMetadata };

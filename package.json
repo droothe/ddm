@@ -7,6 +7,8 @@
     "dev": "vite dev",
     "build": "vite build",
     "build:dev": "vite build --mode development",
+    "dev:tauri": "vite --config vite.tauri.config.ts",
+    "build:tauri": "vite build --config vite.tauri.config.ts",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
