@@ -3,6 +3,7 @@ import type { DownloadItem, Status, ThreadSegment } from "./ddm-store";
 export interface DownloadMetadata {
   name: string;
   extension?: string;
+  mimeType?: string;
   size: number;
   supportsRanges: boolean;
 }
@@ -20,6 +21,11 @@ export interface EngineProgress {
   speed?: number;
   chunks?: ThreadSegment[];
   errorMessage?: string;
+  filePath?: string;
+}
+
+export interface PublishedDownload {
+  uri: string;
 }
 
 type ProgressListener = (event: EngineProgress) => void;
@@ -68,6 +74,10 @@ export function setGlobalSpeedLimit(limitMB: number): void {
 
 export function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && typeof window.__TAURI__?.core?.invoke === "function";
+}
+
+export function isAndroidTauriRuntime(): boolean {
+  return isTauriRuntime() && typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
 }
 
 function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -183,6 +193,7 @@ export async function probeDownload(url: string, threads: number): Promise<Downl
 
   let size: number | undefined;
   let name = fileNameFromUrl(url);
+  let mimeType: string | undefined;
   let acceptsRanges = false;
 
   try {
@@ -191,6 +202,7 @@ export async function probeDownload(url: string, threads: number): Promise<Downl
       acceptsRanges = /^bytes$/i.test(head.headers.get("accept-ranges") ?? "");
       size = parseSize(head.headers.get("content-length"));
       name = responseName(head, url);
+      mimeType = head.headers.get("content-type")?.split(";")[0]?.trim() || undefined;
     }
   } catch {
     // Some servers reject HEAD; the ranged request below can still provide metadata.
@@ -205,6 +217,7 @@ export async function probeDownload(url: string, threads: number): Promise<Downl
       redirect: "follow",
     });
     name = responseName(response, url);
+    mimeType ??= response.headers.get("content-type")?.split(";")[0]?.trim() || undefined;
 
     if (response.status === 206) {
       supportsRanges = true;
@@ -236,6 +249,7 @@ export async function probeDownload(url: string, threads: number): Promise<Downl
   return {
     name,
     ...(extension ? { extension } : {}),
+    ...(mimeType ? { mimeType } : {}),
     size,
     supportsRanges,
   };
@@ -334,7 +348,33 @@ export async function openDownloadFolder(path: string, name: string): Promise<vo
       "Opening a local folder requires the native Tauri app. Browser downloads use the browser's save location.",
     );
   }
+  if (isAndroidTauriRuntime()) {
+    if (!path.startsWith("content://")) {
+      throw new Error("This download has not been published to Android media storage yet.");
+    }
+    await invoke<void>("plugin:share-intent|openMediaStoreItem", { uri: path });
+    return;
+  }
   await invoke<void>("show_download_in_folder", { path, name });
+}
+
+export async function publishDownloadToAndroid(
+  sourcePath: string,
+  name: string,
+  mimeType?: string,
+): Promise<PublishedDownload> {
+  if (!isAndroidTauriRuntime()) {
+    throw new Error("Android MediaStore is available only in the Android app.");
+  }
+  const result = await invoke<PublishedDownload>("plugin:share-intent|publishDownload", {
+    sourcePath,
+    name,
+    ...(mimeType ? { mimeType } : {}),
+  });
+  if (!result || typeof result.uri !== "string" || !result.uri.startsWith("content://")) {
+    throw new Error("Android did not return a valid MediaStore URI.");
+  }
+  return result;
 }
 
 async function runBrowserTask(task: BrowserTask): Promise<void> {

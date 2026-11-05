@@ -1,19 +1,20 @@
-# Android share-intent setup
+# Android build and storage
 
-The Tauri Android plugin is registered in `src-tauri/src/lib.rs`; its Kotlin implementation is
-`src-tauri/gen/android/app/src/main/java/dev/droothe/ddm/ShareIntentPlugin.kt`. After running
-`cargo tauri android init`, verify that the generated project retains that source file. Merge the
-following filter into the generated `.MainActivity` declaration in
-`src-tauri/gen/android/app/src/main/AndroidManifest.xml`:
+The Android project is generated reproducibly by `cargo tauri android init`. Run
+`python src-tauri/android/prepare_android.py` afterward to merge the `ACTION_SEND` / `text/plain`
+filter into the launcher activity, set `singleTask`, and install the native plugin from
+`src-tauri/android/plugin`. The script is idempotent and preserves the generated activity's other
+manifest attributes, including `android:exported`.
 
-```xml
-<!-- contents of src-tauri/android/AndroidManifest.share-intent.xml -->
-```
+The `Android APK` GitHub Actions workflow performs those steps and uploads an arm64 APK artifact.
+Download it from the workflow run's **Artifacts** section.
 
-Keep the generated activity's existing `android:exported` setting. The Kotlin plugin forwards warm
-`onNewIntent` shares as a `ddm:share-intent` WebView event and exposes the cold-start intent through
-its `getInitialSharedText` command. Ensure the activity uses `android:launchMode="singleTask"` so
-subsequent shares reach `onNewIntent` instead of creating another activity.
-Do not grant broad external-storage permissions: Android 10+ scoped storage should be used. The
-Rust engine writes under the app's selected private directory; exporting to public Downloads or
-MediaStore requires a separate SAF/MediaStore integration and a user-authorized URI.
+On Android 10 and newer, completed downloads are copied from app-private storage into scoped
+MediaStore collections without requesting broad storage permissions:
+
+- video -> `Movies/Droothe`
+- audio -> `Music/Droothe`
+- other files -> `Download/Droothe`
+
+The MediaStore URI is retained by the UI and the open action launches an Android viewer for that
+item. Failed publication is reported in the download row; the original app-private file remains.

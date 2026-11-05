@@ -8,7 +8,8 @@ This repository contains the SSR web UI, a browser download engine, and an optio
 - Browsers cannot write to an arbitrary local directory or reveal a file in the operating system's file manager. The directory setting is used by the native bridge only.
 - Browser downloads are held in memory until complete. Pause/resume keeps partial byte ranges in memory for the current page session; a server without Range support must be downloaded again from the beginning after a pause.
 - The native backend registers `check_url_headers`, `start_download`, `pause_download`, `resume_download`, `cancel_download`, and `show_download_in_folder`. `start_download` receives `url`, `savePath`, `threadCount`, `downloadId`, and `speedLimitBytesPerSecond`; progress is emitted as `download-progress`.
-- Relative save directories are resolved under the current user's home directory by the native app.
+- Desktop relative save directories are resolved under the current user's home directory. Android
+  uses app-private staging storage and publishes completed files through scoped MediaStore.
 - The native HTTP client accepts HTTP(S) URLs without embedded credentials. Treat links from untrusted sources as user-initiated downloads.
 
 ## Browser extension handoff
@@ -43,12 +44,18 @@ cargo tauri build --no-bundle
 The output is `src-tauri/target/release/droothe-download-manager.exe`. The Tauri icon assets are
 generated from `src-tauri/app-icon.svg` in `src-tauri/icons`.
 
-For Android, install JDK 17 and the Android SDK command-line tools, platform-tools, NDK, and
-platform/build-tools required by Tauri. Then initialize the Android project, apply the
-[share-intent manifest setup](./src-tauri/android/README.md), and build an arm64 APK:
+Android APKs are built by the
+[Android APK GitHub Actions workflow](./.github/workflows/android-apk.yml) on pushes to `main` or
+when manually dispatched. The workflow initializes the Tauri Android project, applies the
+[manifest and MediaStore integration](./src-tauri/android/README.md), builds an arm64 APK, and
+uploads it as a workflow artifact.
 
 ```sh
+cd src-tauri
 cargo tauri android init
+cd ..
+python src-tauri/android/prepare_android.py
+cd src-tauri
 cargo tauri android build --apk --target aarch64
 ```
 

@@ -11,10 +11,12 @@ import {
 import {
   cancelDownload,
   extractMediaUrl,
+  isAndroidTauriRuntime,
   listenForExternalDownloads,
   listenForProgress,
   openDownloadFolder,
   pauseDownload,
+  publishDownloadToAndroid,
   probeDownload,
   resumeDownload,
   startDownload,
@@ -50,6 +52,7 @@ export interface DownloadItem {
   path: string;
   supportsRanges: boolean;
   prepared: boolean;
+  mimeType?: string;
   errorMessage?: string;
 }
 
@@ -149,10 +152,13 @@ export function DDMProvider({ children }: { children: ReactNode }) {
   const [shareError, setShareError] = useState<string | null>(null);
   const [extension, setExtension] = useState<"listening" | "unavailable">("unavailable");
   const [engine, setEngine] = useState<"browser" | "tauri">("browser");
+  const downloadsRef = useRef(downloads);
+  downloadsRef.current = downloads;
   const starting = useRef(new Set<string>());
   const started = useRef(new Set<string>());
   const resuming = useRef(new Set<string>());
   const retrying = useRef(new Set<string>());
+  const publishing = useRef(new Set<string>());
 
   const updateDownload = useCallback((id: string, update: Partial<DownloadItem>) => {
     setDownloads((items) => items.map((item) => (item.id === id ? { ...item, ...update } : item)));
@@ -188,6 +194,31 @@ export function DDMProvider({ children }: { children: ReactNode }) {
 
     void Promise.all([
       listenForProgress((event) => {
+        if (event.status === "completed" && event.filePath && isAndroidTauriRuntime()) {
+          const item = downloadsRef.current.find((download) => download.id === event.id);
+          if (item && !publishing.current.has(item.id)) {
+            publishing.current.add(item.id);
+            void publishDownloadToAndroid(event.filePath, item.name, item.mimeType)
+              .then(({ uri }) => {
+                setDownloads((items) =>
+                  items.map((download) =>
+                    download.id === item.id ? { ...download, path: uri, errorMessage: "" } : download,
+                  ),
+                );
+              })
+              .catch((error: unknown) => {
+                const message = getErrorMessage(error);
+                setDownloads((items) =>
+                  items.map((download) =>
+                    download.id === item.id
+                      ? { ...download, errorMessage: `Downloaded, but could not save to Android media storage: ${message}` }
+                      : download,
+                  ),
+                );
+              })
+              .finally(() => publishing.current.delete(item.id));
+          }
+        }
         setDownloads((items) =>
           items.map((item) => (item.id === event.id ? applyProgress(item, event) : item)),
         );
@@ -271,6 +302,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
             name: metadata.name,
             size: metadata.size,
             supportsRanges: metadata.supportsRanges,
+            ...(metadata.mimeType ? { mimeType: metadata.mimeType } : {}),
             chunks: segments,
             prepared: true,
             category: detectCategory(metadata.name),

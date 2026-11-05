@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ClipboardPaste, FolderOpen, X } from "lucide-react";
 import { detectCategory, fileNameFromUrl, useDDM, type Category } from "@/lib/ddm-store";
+import { isAndroidTauriRuntime } from "@/lib/downloadEngine";
 import { CategoryIcon } from "./CategoryIcon";
 
 const CATS: { key: Category; label: string }[] = [
@@ -20,6 +21,7 @@ export function AddDownloadModal({
   initialUrl?: string;
 }) {
   const { add, settings, sharedMedia, shareError, resolveSharedMedia } = useDDM();
+  const isAndroid = isAndroidTauriRuntime();
   const [url, setUrl] = useState("");
   const [threads, setThreads] = useState(settings.defaultThreads);
   const [path, setPath] = useState(settings.defaultDir);
@@ -116,7 +118,7 @@ export function AddDownloadModal({
         )}
 
         <label className="mt-5 block text-xs uppercase tracking-wider text-muted-foreground">
-          Save directory
+          {isAndroid ? "App storage subfolder" : "Save directory"}
         </label>
         <div className="mt-1.5 flex items-center gap-2 rounded-md border border-input bg-background px-3">
           <FolderOpen className="h-4 w-4 text-muted-foreground" />
@@ -127,8 +129,9 @@ export function AddDownloadModal({
           />
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          The browser saves to its configured download location; a custom directory requires the
-          native app.
+          {isAndroid
+            ? "Downloads are staged privately, then copied to Movies, Music, or Downloads through Android MediaStore. Use a relative subfolder."
+            : "The browser saves to its configured download location; a custom directory requires the native app."}
         </p>
 
         <div className="mt-5 flex justify-between text-xs uppercase tracking-wider text-muted-foreground">

@@ -16,14 +16,16 @@ use reqwest::{
     Client, Response, StatusCode,
 };
 use serde::Serialize;
+#[cfg(target_os = "android")]
+use tauri::Manager;
 use tauri::{Emitter, State};
 use tauri_plugin_notification::NotificationExt;
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
+    sync::watch,
     sync::Mutex as AsyncMutex,
     task::JoinSet,
-    sync::watch,
 };
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -36,6 +38,34 @@ struct DownloadManager {
     jobs: Arc<Mutex<HashMap<String, DownloadControl>>>,
     client: Client,
     rate_limiter: RateLimiter,
+}
+
+fn resolve_download_destination(value: &str, app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    #[cfg(target_os = "android")]
+    {
+        let relative = Path::new(value);
+        if relative.is_absolute() {
+            return Err("Android downloads must use an app-relative destination.".to_owned());
+        }
+        let root = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("Could not find app storage: {error}"))?;
+        let mut destination = root;
+        for component in relative.components() {
+            match component {
+                std::path::Component::Normal(part) => destination.push(part),
+                std::path::Component::CurDir => {}
+                _ => return Err("The Android download path is invalid.".to_owned()),
+            }
+        }
+        Ok(destination)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        resolve_destination(value)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,9 +136,7 @@ async fn extract_media_url(
         extension.as_str(),
         "mp4" | "m4v" | "mov" | "webm" | "mp3" | "m4a" | "wav" | "ogg" | "flac"
     );
-    if !mime_type.starts_with("video/")
-        && !mime_type.starts_with("audio/")
-        && !supported_extension
+    if !mime_type.starts_with("video/") && !mime_type.starts_with("audio/") && !supported_extension
     {
         return Err("The shared URL does not point to a direct audio or video file.".to_owned());
     }
@@ -139,11 +167,7 @@ impl RateLimiter {
             .store(bytes_per_second, Ordering::Relaxed);
     }
 
-    async fn wait(
-        &self,
-        byte_count: usize,
-        cancel: &CancellationToken,
-    ) -> Result<bool, String> {
+    async fn wait(&self, byte_count: usize, cancel: &CancellationToken) -> Result<bool, String> {
         let bytes_per_second = self.bytes_per_second.load(Ordering::Relaxed);
         if bytes_per_second == 0 {
             return Ok(true);
@@ -170,6 +194,8 @@ struct DownloadMetadata {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     extension: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mime_type: Option<String>,
     size: u64,
     supports_ranges: bool,
 }
@@ -193,6 +219,8 @@ struct DownloadProgress {
     chunks: Vec<ThreadSegment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_path: Option<String>,
 }
 
 impl Default for DownloadManager {
@@ -264,7 +292,7 @@ async fn start_download(
     if download_id.is_empty() || download_id.len() > 128 {
         return Err("Download ID is invalid.".to_owned());
     }
-    let destination_dir = resolve_destination(&save_path)?;
+    let destination_dir = resolve_download_destination(&save_path, &app)?;
     if destination_dir.as_os_str().is_empty() {
         return Err("A destination directory is required.".to_owned());
     }
@@ -284,10 +312,7 @@ async fn start_download(
     let job_uuid = Uuid::new_v4();
     let part_paths: Vec<PathBuf> = (0..segments.len())
         .map(|index| {
-            destination_dir.join(format!(
-                ".{}.ddm-{job_uuid}.part-{index}",
-                metadata.name
-            ))
+            destination_dir.join(format!(".{}.ddm-{job_uuid}.part-{index}", metadata.name))
         })
         .collect();
     let merge_path = destination_dir.join(format!(".{}.ddm-{job_uuid}.merge", metadata.name));
@@ -330,6 +355,7 @@ async fn start_download(
                     speed: 0,
                     chunks: Vec::new(),
                     error_message: Some(error.clone()),
+                    file_path: None,
                 };
                 if let Err(emit_error) = app.emit(PROGRESS_EVENT, progress) {
                     eprintln!("Could not emit download error for {download_id}: {emit_error}");
@@ -352,9 +378,7 @@ async fn pause_download(
     let control = manager
         .get(&id)?
         .ok_or_else(|| "Download is not active.".to_owned())?;
-    control
-        .paused
-        .send_replace(true);
+    control.paused.send_replace(true);
     app.emit(PROGRESS_EVENT, basic_progress(&id, "paused", 0, Vec::new()))
         .map_err(|error| format!("Could not notify the frontend: {error}"))
 }
@@ -368,11 +392,12 @@ async fn resume_download(
     let control = manager
         .get(&id)?
         .ok_or_else(|| "Download is not active.".to_owned())?;
-    control
-        .paused
-        .send_replace(false);
-    app.emit(PROGRESS_EVENT, basic_progress(&id, "downloading", 0, Vec::new()))
-        .map_err(|error| format!("Could not notify the frontend: {error}"))
+    control.paused.send_replace(false);
+    app.emit(
+        PROGRESS_EVENT,
+        basic_progress(&id, "downloading", 0, Vec::new()),
+    )
+    .map_err(|error| format!("Could not notify the frontend: {error}"))
 }
 
 #[tauri::command]
@@ -384,8 +409,11 @@ async fn cancel_download(
     if let Some(control) = manager.get(&id)? {
         control.cancel.cancel();
     }
-    app.emit(PROGRESS_EVENT, basic_progress(&id, "cancelled", 0, Vec::new()))
-        .map_err(|error| format!("Could not notify the frontend: {error}"))
+    app.emit(
+        PROGRESS_EVENT,
+        basic_progress(&id, "cancelled", 0, Vec::new()),
+    )
+    .map_err(|error| format!("Could not notify the frontend: {error}"))
 }
 
 #[tauri::command]
@@ -408,7 +436,12 @@ async fn show_download_in_folder(path: String, name: String) -> Result<(), Strin
         .map_err(|error| format!("Could not open the download location: {error}"))
 }
 
-fn basic_progress(id: &str, status: &str, size: u64, chunks: Vec<ThreadSegment>) -> DownloadProgress {
+fn basic_progress(
+    id: &str,
+    status: &str,
+    size: u64,
+    chunks: Vec<ThreadSegment>,
+) -> DownloadProgress {
     DownloadProgress {
         id: id.to_owned(),
         status: status.to_owned(),
@@ -416,6 +449,7 @@ fn basic_progress(id: &str, status: &str, size: u64, chunks: Vec<ThreadSegment>)
         speed: 0,
         chunks,
         error_message: None,
+        file_path: None,
     }
 }
 
@@ -474,12 +508,18 @@ async fn probe_url(client: &Client, raw_url: &str) -> Result<DownloadMetadata, S
         }
         size = content_range.map(|(_, _, total)| total).or(size);
     } else if response.status().is_success() {
-        size = response.content_length().filter(|value| *value > 0).or(size);
+        size = response
+            .content_length()
+            .filter(|value| *value > 0)
+            .or(size);
         if advertised_ranges {
             eprintln!("Server advertised Accept-Ranges but ignored the byte-range probe: {url}");
         }
     } else {
-        return Err(format!("Server rejected URL probe with HTTP {}.", response.status()));
+        return Err(format!(
+            "Server rejected URL probe with HTTP {}.",
+            response.status()
+        ));
     }
     drop(response);
 
@@ -494,6 +534,7 @@ async fn probe_url(client: &Client, raw_url: &str) -> Result<DownloadMetadata, S
         extension: Path::new(&name)
             .extension()
             .map(|value| value.to_string_lossy().to_ascii_lowercase()),
+        mime_type: (!content_type.is_empty()).then_some(content_type),
         name,
         size,
         supports_ranges,
@@ -576,11 +617,7 @@ fn safe_file_name(value: &str) -> String {
         .next()
         .unwrap_or_default()
         .trim();
-    if leaf.is_empty()
-        || leaf == "."
-        || leaf == ".."
-        || leaf.chars().any(char::is_control)
-    {
+    if leaf.is_empty() || leaf == "." || leaf == ".." || leaf.chars().any(char::is_control) {
         "download.bin".to_owned()
     } else {
         leaf.to_owned()
@@ -606,7 +643,11 @@ fn split_ranges(size: u64, thread_count: usize) -> Result<Vec<ThreadSegment>, St
     let mut start = 0;
     let mut segments = Vec::with_capacity(count);
     for index in 0..count {
-        let length = if index + 1 == count { size - start } else { base };
+        let length = if index + 1 == count {
+            size - start
+        } else {
+            base
+        };
         segments.push(ThreadSegment {
             start,
             end: start + length - 1,
@@ -630,7 +671,16 @@ async fn run_download(
     merge_path: &Path,
     control: DownloadControl,
 ) -> Result<(), String> {
-    emit_download_progress(app, id, "downloading", metadata.size, 0, &segments, None)?;
+    emit_download_progress(
+        app,
+        id,
+        "downloading",
+        metadata.size,
+        0,
+        &segments,
+        None,
+        None,
+    )?;
 
     let completed = Arc::new(
         segments
@@ -686,7 +736,7 @@ async fn run_download(
     if control.cancel.is_cancelled() {
         return Err("Download cancelled.".to_owned());
     }
-    emit_download_progress(app, id, "merging", metadata.size, 0, &segments, None)?;
+    emit_download_progress(app, id, "merging", metadata.size, 0, &segments, None, None)?;
     tokio::select! {
         _ = control.cancel.cancelled() => return Err("Download cancelled.".to_owned()),
         result = merge_parts(&part_paths, merge_path, file_path, metadata.size) => result?,
@@ -706,6 +756,7 @@ async fn run_download(
             })
             .collect::<Vec<_>>(),
         None,
+        Some(file_path),
     )?;
     if let Err(error) = app
         .notification()
@@ -775,7 +826,10 @@ async fn download_segment(
             result = request.send() => result.map_err(|error| format!("Chunk request failed: {error}"))?,
         };
         if !response.status().is_success() {
-            return Err(format!("Chunk request failed with HTTP {}.", response.status()));
+            return Err(format!(
+                "Chunk request failed with HTTP {}.",
+                response.status()
+            ));
         }
         if metadata.supports_ranges && response.status() != StatusCode::PARTIAL_CONTENT {
             return Err("The server stopped honoring HTTP Range requests.".to_owned());
@@ -843,12 +897,23 @@ async fn download_segment(
                             ..chunk.clone()
                         })
                         .collect::<Vec<_>>();
-                    emit_download_progress(app, id, "downloading", metadata.size, speed, &current, None)?;
+                    emit_download_progress(
+                        app,
+                        id,
+                        "downloading",
+                        metadata.size,
+                        speed,
+                        &current,
+                        None,
+                        None,
+                    )?;
                 }
             }
         }
         if !paused_mid_stream && segment.done < segment.size {
-            return Err("The server ended a chunk before the requested byte range was complete.".to_owned());
+            return Err(
+                "The server ended a chunk before the requested byte range was complete.".to_owned(),
+            );
         }
     }
 
@@ -886,6 +951,7 @@ fn emit_download_progress(
     speed: u64,
     chunks: &[ThreadSegment],
     error_message: Option<String>,
+    file_path: Option<&Path>,
 ) -> Result<(), String> {
     app.emit(
         PROGRESS_EVENT,
@@ -896,6 +962,7 @@ fn emit_download_progress(
             speed,
             chunks: chunks.to_vec(),
             error_message,
+            file_path: file_path.map(|path| path.to_string_lossy().into_owned()),
         },
     )
     .map_err(|error| format!("Could not emit download progress: {error}"))
@@ -959,7 +1026,10 @@ async fn remove_files(parts: &[PathBuf], merge_path: &Path) {
     for path in parts {
         if let Err(error) = fs::remove_file(path).await {
             if error.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("Could not remove temporary download file {}: {error}", path.display());
+                eprintln!(
+                    "Could not remove temporary download file {}: {error}",
+                    path.display()
+                );
             }
         }
     }
