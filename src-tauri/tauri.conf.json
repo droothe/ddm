@@ -30,6 +30,13 @@
       "capabilities": ["default"]
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["ddm"]
+      }
+    }
+  },
   "bundle": {
     "active": false
   }

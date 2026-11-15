@@ -72,7 +72,7 @@ On Android 10 and newer, completed videos are published under `Movies/Droothe`, 
 
 ## Chromium browser extension
 
-The Manifest V3 extension supports Chrome, Brave, and Edge. It forwards links only to open DDM web-app tabs; the extension does not connect directly to a standalone Tauri desktop window.
+The Manifest V3 extension supports Chrome, Brave, and Edge. It prefers an open DDM web-app tab. If none is found, it opens a `ddm://download?url=...` link to hand the download to the desktop application.
 
 1. Open the browser's extensions page:
    - Chrome: `chrome://extensions`
@@ -80,7 +80,7 @@ The Manifest V3 extension supports Chrome, Brave, and Edge. It forwards links on
    - Edge: `edge://extensions`
 2. Turn on **Developer mode**.
 3. Choose **Load unpacked** and select the repository's `extension/` folder.
-4. Open the DDM web app in a tab. On another page, right-click a link and choose **Download with DDM**.
+4. On Windows, launch the desktop app once to register the `ddm` protocol. Then, on any page, right-click a link and choose **Download with DDM**. When no DDM web tab is open, the browser will ask to launch the desktop app if needed.
 
 The extension's content script relays the URL to the DDM page using:
 
@@ -88,7 +88,7 @@ The extension's content script relays the URL to the DDM page using:
 window.postMessage({ type: "ddm:add-download", url }, "*");
 ```
 
-The app validates incoming URLs and opens the new-download dialog. A browser extension cannot post messages into a separate native Tauri webview; connecting to the standalone desktop app would require a separate native-messaging or deep-link integration.
+The app validates incoming URLs and opens the new-download dialog. The Windows desktop app registers `ddm://` at startup; its single-instance integration forwards later protocol activations to the running app and focuses its window. Supported links are `ddm://download?url=<encoded-http-url>` and `ddm://add?url=<encoded-http-url>`.
 
 ## Development
 
@@ -132,7 +132,7 @@ bun run lint
 - **HTTP range support:** the native engine verifies that a server honors byte-range requests before downloading multiple segments. If ranges are unavailable, it downloads as a single stream; concurrent segments and range-based resume are not available for that server. A server that advertises ranges but does not honor them may fail the download.
 - **Browser storage:** browser downloads are assembled in memory and saved through the browser's download mechanism. A web page cannot write to an arbitrary filesystem path or reveal a file in the operating system's file manager. Use the native app for destination-folder control.
 - **Social platforms:** sharing and previewing is intended for direct audio/video file URLs. DDM deliberately does not extract media from social-platform pages; use a direct URL you are authorized to download.
-- **Extension handoff:** the extension requires an open DDM browser page. `window.postMessage` cannot reach a separate desktop application's webview.
+- **Extension handoff:** `window.postMessage` reaches an open DDM browser page; otherwise the extension uses the registered `ddm://` handler to open or activate the desktop app.
 - **URL support:** downloads use HTTP or HTTPS links; embedded URL credentials are not accepted by the native engine.
 
 ## License

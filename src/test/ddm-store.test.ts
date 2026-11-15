@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createThreadSegments } from "@/lib/ddm-store";
 import { extractSharedUrl } from "@/hooks/useShareIntent";
+import { extractDownloadUrlFromDeepLink } from "@/lib/downloadEngine";
 
 describe("createThreadSegments", () => {
   it("divides byte ranges without gaps or overlap", () => {
@@ -24,6 +25,31 @@ describe("createThreadSegments", () => {
     it("ignores non-web and malformed shared text", () => {
       expect(extractSharedUrl("file:///storage/video.mp4")).toBeNull();
       expect(extractSharedUrl("nothing to download")).toBeNull();
+    });
+  });
+
+  describe("extractDownloadUrlFromDeepLink", () => {
+    it("extracts download URLs from supported DDM deep links", () => {
+      expect(
+        extractDownloadUrlFromDeepLink(
+          "ddm://download?url=https%3A%2F%2Fexample.com%2Ffile.zip",
+        ),
+      ).toBe("https://example.com/file.zip");
+      expect(
+        extractDownloadUrlFromDeepLink("ddm://add?url=https%3A%2F%2Fexample.com%2Fvideo.mp4"),
+      ).toBe("https://example.com/video.mp4");
+    });
+
+    it("rejects unsupported schemes, actions, and download protocols", () => {
+      expect(() => extractDownloadUrlFromDeepLink("https://example.com")).toThrow(
+        "Unsupported DDM deep link",
+      );
+      expect(() => extractDownloadUrlFromDeepLink("ddm://settings?url=https%3A%2F%2Fx.test")).toThrow(
+        "Unsupported DDM deep link",
+      );
+      expect(() => extractDownloadUrlFromDeepLink("ddm://download?url=file%3A%2F%2F%2Ffile.zip")).toThrow(
+        "Only HTTP and HTTPS",
+      );
     });
   });
 

@@ -16,7 +16,6 @@ use reqwest::{
     Client, Response, StatusCode,
 };
 use serde::Serialize;
-#[cfg(target_os = "android")]
 use tauri::Manager;
 use tauri::{Emitter, State};
 use tauri_plugin_notification::NotificationExt;
@@ -1044,8 +1043,22 @@ async fn remove_files(parts: &[PathBuf], merge_path: &Path) {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(error) = window.set_focus() {
+                    eprintln!("Could not focus the existing DDM window: {error}");
+                }
+            }
+        }));
+    }
+
+    builder
         .manage(DownloadManager::default())
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri::plugin::Builder::<tauri::Wry>::new("share-intent")
@@ -1056,6 +1069,14 @@ pub fn run() {
                 })
                 .build(),
         )
+        .setup(|app| {
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                app.deep_link().register_all()?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             check_url_headers,
             extract_media_url,

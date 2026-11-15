@@ -38,6 +38,10 @@ interface TauriBridge {
   event?: {
     listen<T>(event: string, handler: (event: { payload: T }) => void): Promise<() => void>;
   };
+  deepLink?: {
+    getCurrent(): Promise<string[] | null>;
+    onOpenUrl(handler: (urls: string[]) => void): Promise<() => void>;
+  };
 }
 
 declare global {
@@ -101,6 +105,27 @@ function validateUrl(url: string) {
     throw new Error("Only HTTP and HTTPS download URLs are supported.");
   }
   return parsed;
+}
+
+export function extractDownloadUrlFromDeepLink(value: string): string {
+  let deepLink: URL;
+  try {
+    deepLink = new URL(value);
+  } catch {
+    throw new Error("Invalid DDM deep link.");
+  }
+
+  if (
+    deepLink.protocol !== "ddm:" ||
+    !["add", "download"].includes(deepLink.hostname) ||
+    (deepLink.pathname !== "" && deepLink.pathname !== "/")
+  ) {
+    throw new Error("Unsupported DDM deep link.");
+  }
+
+  const downloadUrl = deepLink.searchParams.get("url");
+  if (!downloadUrl) throw new Error("The DDM deep link is missing its download URL.");
+  return validateUrl(downloadUrl).href;
 }
 
 function parseSize(value: string | null): number | undefined {
@@ -599,6 +624,13 @@ export async function listenForExternalDownloads(
       console.warn("Ignored invalid external download URL.", error);
     }
   };
+  const handleDeepLink = (value: string) => {
+    try {
+      handleUrl(extractDownloadUrlFromDeepLink(value));
+    } catch (error) {
+      console.warn("Ignored invalid DDM deep link.", error);
+    }
+  };
 
   const onMessage = (event: MessageEvent<unknown>) => {
     if (
@@ -621,13 +653,23 @@ export async function listenForExternalDownloads(
   }
 
   let unlistenTauri: (() => void) | undefined;
+  let unlistenDeepLink: (() => void) | undefined;
   if (isTauriRuntime() && window.__TAURI__?.event?.listen) {
     try {
       unlistenTauri = await window.__TAURI__.event.listen<{ url: string }>(
         "external-download-request",
         ({ payload }) => handleUrl(payload["url"]),
       );
+      if (!isAndroidTauriRuntime() && window.__TAURI__?.deepLink) {
+        unlistenDeepLink = await window.__TAURI__.deepLink.onOpenUrl((urls) =>
+          urls.forEach(handleDeepLink),
+        );
+        const currentUrls = await window.__TAURI__.deepLink.getCurrent();
+        currentUrls?.forEach(handleDeepLink);
+      }
     } catch (error) {
+      unlistenTauri?.();
+      unlistenDeepLink?.();
       window.removeEventListener("message", onMessage);
       window.removeEventListener("ddm:add-download", onCustomEvent);
       throw error;
@@ -640,6 +682,7 @@ export async function listenForExternalDownloads(
       window.removeEventListener("ddm:add-download", onCustomEvent);
     }
     unlistenTauri?.();
+    unlistenDeepLink?.();
   };
 }
 
