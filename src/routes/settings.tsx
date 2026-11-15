@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { FolderOpen, Puzzle } from "lucide-react";
@@ -6,7 +7,6 @@ import {
   chooseDownloadDirectory,
   getDefaultDownloadDirectory,
   isAndroidTauriRuntime,
-  isTauriRuntime,
 } from "@/lib/downloadEngine";
 import { useDDM } from "@/lib/ddm-store";
 
@@ -33,7 +33,7 @@ function SettingsPage() {
   const navigate = useNavigate();
   const [systemDownloadDirectory, setSystemDownloadDirectory] = useState("Downloads");
   const [directoryError, setDirectoryError] = useState("");
-  const isDesktopTauri = isTauriRuntime() && !isAndroidTauriRuntime();
+  const isDesktopTauri = isTauri() && !isAndroidTauriRuntime();
 
   useEffect(() => {
     if (externalUrl) void navigate({ to: "/" });

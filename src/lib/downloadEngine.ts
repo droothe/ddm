@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { DownloadItem, Status, ThreadSegment } from "./ddm-store";
 
@@ -78,7 +79,7 @@ export function setGlobalSpeedLimit(limitMB: number): void {
 }
 
 export function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && typeof window.__TAURI__?.core?.invoke === "function";
+  return isTauri();
 }
 
 export function isAndroidTauriRuntime(): boolean {

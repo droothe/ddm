@@ -1,7 +1,8 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import { ClipboardPaste, FolderOpen, X } from "lucide-react";
 import { detectCategory, fileNameFromUrl, useDDM, type Category } from "@/lib/ddm-store";
-import { isAndroidTauriRuntime, isTauriRuntime, readClipboardText } from "@/lib/downloadEngine";
+import { isAndroidTauriRuntime, readClipboardText } from "@/lib/downloadEngine";
 import { CategoryIcon } from "./CategoryIcon";
 
 const CATS: { key: Category; label: string }[] = [
@@ -66,16 +67,23 @@ export function AddDownloadModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-background/80 backdrop-blur-sm p-4"
+      data-testid="download-modal-backdrop"
+      className="pointer-events-auto fixed inset-0 z-[100] grid place-items-center bg-background/80 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-download-title"
+        className="pointer-events-auto relative z-[101] w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-lg font-semibold text-card-foreground">New Download</h2>
+          <h2 id="add-download-title" className="text-lg font-semibold text-card-foreground">
+            New Download
+          </h2>
           <button
+            type="button"
             onClick={onClose}
             className="text-muted-foreground hover:text-foreground"
             aria-label="Close"
@@ -84,17 +92,18 @@ export function AddDownloadModal({
           </button>
         </div>
 
-        <label className="text-xs uppercase tracking-wider text-muted-foreground">
+        <label htmlFor="download-url" className="text-xs uppercase tracking-wider text-muted-foreground">
           URL (DDL / Video)
         </label>
         <div className="mt-1.5 flex gap-2">
           <input
+            id="download-url"
             autoFocus
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(event) => {
               if (
-                isTauriRuntime() &&
+                isTauri() &&
                 (event.ctrlKey || event.metaKey) &&
                 event.key.toLowerCase() === "v"
               ) {
@@ -106,6 +115,7 @@ export function AddDownloadModal({
             className="flex-1 rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-ring"
           />
           <button
+            type="button"
             onClick={paste}
             className="rounded-md border border-input px-3 text-muted-foreground hover:text-primary"
             aria-label="Paste"
@@ -155,7 +165,9 @@ export function AddDownloadModal({
         <p className="mt-1 text-xs text-muted-foreground">
           {isAndroid
             ? "Downloads are staged privately, then copied to Movies, Music, or Downloads through Android MediaStore. Use a relative subfolder."
-            : "The browser saves to its configured download location; a custom directory requires the native app."}
+            : isTauri()
+              ? "Downloads are saved to the selected directory by the native app."
+              : "The browser saves to its configured download location; a custom directory requires the native app."}
         </p>
         {addError && (
           <p className="mt-2 text-sm text-destructive" role="alert">
@@ -192,12 +204,14 @@ export function AddDownloadModal({
 
         <div className="mt-6 flex justify-end gap-2">
           <button
+            type="button"
             onClick={onClose}
             className="rounded-md px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={async () => {
               setIsAdding(true);
               setAddError("");

@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { createThreadSegments } from "@/lib/ddm-store";
 import { extractSharedUrl } from "@/hooks/useShareIntent";
-import { extractDownloadUrlFromDeepLink } from "@/lib/downloadEngine";
+import { extractDownloadUrlFromDeepLink, isTauriRuntime } from "@/lib/downloadEngine";
+
+describe("isTauriRuntime", () => {
+  it("uses Tauri's official runtime marker", () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "isTauri");
+    Object.defineProperty(globalThis, "isTauri", { value: true, configurable: true });
+
+    expect(isTauriRuntime()).toBe(true);
+
+    if (previous) Object.defineProperty(globalThis, "isTauri", previous);
+    else Reflect.deleteProperty(globalThis, "isTauri");
+  });
+});
 
 describe("createThreadSegments", () => {
   it("divides byte ranges without gaps or overlap", () => {
@@ -31,9 +43,7 @@ describe("createThreadSegments", () => {
   describe("extractDownloadUrlFromDeepLink", () => {
     it("extracts download URLs from supported DDM deep links", () => {
       expect(
-        extractDownloadUrlFromDeepLink(
-          "ddm://download?url=https%3A%2F%2Fexample.com%2Ffile.zip",
-        ),
+        extractDownloadUrlFromDeepLink("ddm://download?url=https%3A%2F%2Fexample.com%2Ffile.zip"),
       ).toBe("https://example.com/file.zip");
       expect(
         extractDownloadUrlFromDeepLink("ddm://add?url=https%3A%2F%2Fexample.com%2Fvideo.mp4"),
@@ -44,12 +54,12 @@ describe("createThreadSegments", () => {
       expect(() => extractDownloadUrlFromDeepLink("https://example.com")).toThrow(
         "Unsupported DDM deep link",
       );
-      expect(() => extractDownloadUrlFromDeepLink("ddm://settings?url=https%3A%2F%2Fx.test")).toThrow(
-        "Unsupported DDM deep link",
-      );
-      expect(() => extractDownloadUrlFromDeepLink("ddm://download?url=file%3A%2F%2F%2Ffile.zip")).toThrow(
-        "Only HTTP and HTTPS",
-      );
+      expect(() =>
+        extractDownloadUrlFromDeepLink("ddm://settings?url=https%3A%2F%2Fx.test"),
+      ).toThrow("Unsupported DDM deep link");
+      expect(() =>
+        extractDownloadUrlFromDeepLink("ddm://download?url=file%3A%2F%2F%2Ffile.zip"),
+      ).toThrow("Only HTTP and HTTPS");
     });
   });
 
