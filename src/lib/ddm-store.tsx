@@ -10,8 +10,11 @@ import {
 } from "react";
 import {
   cancelDownload,
+  chooseDownloadTarget,
   extractMediaUrl,
+  getDefaultDownloadDirectory,
   isAndroidTauriRuntime,
+  isTauriRuntime,
   listenForExternalDownloads,
   listenForProgress,
   openDownloadFolder,
@@ -20,7 +23,6 @@ import {
   probeDownload,
   resumeDownload,
   startDownload,
-  isTauriRuntime,
   setGlobalSpeedLimit,
   type DownloadMetadata,
   type DirectMedia,
@@ -50,6 +52,7 @@ export interface DownloadItem {
   chunks: ThreadSegment[];
   speed: number;
   path: string;
+  targetPath?: string;
   supportsRanges: boolean;
   prepared: boolean;
   mimeType?: string;
@@ -60,6 +63,7 @@ export type Download = DownloadItem;
 
 export interface Settings {
   defaultDir: string;
+  askWhereToSave: boolean;
   maxConcurrent: number;
   defaultThreads: number;
   speedLimitMB: number;
@@ -111,7 +115,7 @@ interface DDMContextValue {
   downloads: DownloadItem[];
   settings: Settings;
   setSettings: (settings: Partial<Settings>) => void;
-  add: (url: string, threads: number, path: string) => void;
+  add: (url: string, threads: number, path: string) => Promise<boolean>;
   pause: (id: string) => void;
   resume: (id: string) => void;
   cancel: (id: string) => void;
@@ -132,11 +136,51 @@ interface DDMContextValue {
 const DDMContext = createContext<DDMContextValue | null>(null);
 
 const INITIAL_SETTINGS: Settings = {
-  defaultDir: "Downloads/Droothe",
+  defaultDir: "",
+  askWhereToSave: false,
   maxConcurrent: 3,
   defaultThreads: 8,
   speedLimitMB: 0,
 };
+const SETTINGS_STORAGE_KEY = "ddm-settings-v1";
+
+function parseSettings(value: string): Settings {
+  const saved: unknown = JSON.parse(value);
+  if (!isRecord(saved)) return INITIAL_SETTINGS;
+  return {
+    defaultDir:
+      typeof saved["defaultDir"] === "string" ? saved["defaultDir"] : INITIAL_SETTINGS.defaultDir,
+    askWhereToSave:
+      typeof saved["askWhereToSave"] === "boolean"
+        ? saved["askWhereToSave"]
+        : INITIAL_SETTINGS.askWhereToSave,
+    maxConcurrent:
+      isNumberInRange(saved["maxConcurrent"], 1, 10)
+        ? saved["maxConcurrent"]
+        : INITIAL_SETTINGS.maxConcurrent,
+    defaultThreads:
+      isNumberInRange(saved["defaultThreads"], 1, 16)
+        ? saved["defaultThreads"]
+        : INITIAL_SETTINGS.defaultThreads,
+    speedLimitMB:
+      isNumberInRange(saved["speedLimitMB"], 0, 50)
+        ? saved["speedLimitMB"]
+        : INITIAL_SETTINGS.speedLimitMB,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNumberInRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
+}
+
+function joinDownloadPath(directory: string, name: string): string {
+  const separator = directory.includes("\\") ? "\\" : "/";
+  return `${directory.replace(/[\\/]+$/, "")}${separator}${name}`;
+}
 
 let idSequence = 0;
 const makeId = () =>
@@ -147,6 +191,7 @@ const getErrorMessage = (error: unknown) =>
 export function DDMProvider({ children }: { children: ReactNode }) {
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [settings, setSettingsState] = useState<Settings>(INITIAL_SETTINGS);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [externalUrl, setExternalUrl] = useState<string | null>(null);
   const [sharedMedia, setSharedMedia] = useState<DirectMedia | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
@@ -182,6 +227,26 @@ export function DDMProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useShareIntent(receiveSharedUrl);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (saved) setSettingsState(parseSettings(saved));
+    } catch (error) {
+      console.error("Could not load saved settings.", error);
+    } finally {
+      setSettingsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    try {
+      window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    } catch (error) {
+      console.error("Could not save settings.", error);
+    }
+  }, [settings, settingsLoaded]);
 
   useEffect(() => {
     setGlobalSpeedLimit(settings.speedLimitMB);
@@ -281,7 +346,15 @@ export function DDMProvider({ children }: { children: ReactNode }) {
   }, [downloads, settings.maxConcurrent, updateDownload]);
 
   const add = useCallback(
-    (url: string, threads: number, path: string) => {
+    async (url: string, threads: number, path: string): Promise<boolean> => {
+      let targetPath: string | undefined;
+      if (settings.askWhereToSave && isTauriRuntime() && !isAndroidTauriRuntime()) {
+        const directory = path.trim() || (await getDefaultDownloadDirectory());
+        const defaultPath = joinDownloadPath(directory, fileNameFromUrl(url));
+        targetPath = (await chooseDownloadTarget(defaultPath)) ?? undefined;
+        if (!targetPath) return false;
+      }
+
       const id = makeId();
       const initialName = fileNameFromUrl(url);
       const item: DownloadItem = {
@@ -295,6 +368,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
         chunks: [],
         speed: 0,
         path,
+        ...(targetPath ? { targetPath } : {}),
         supportsRanges: false,
         prepared: false,
       };
@@ -306,25 +380,31 @@ export function DDMProvider({ children }: { children: ReactNode }) {
             metadata.size,
             metadata.supportsRanges ? threads : 1,
           );
+          const name =
+            targetPath?.split(/[\\/]/).filter(Boolean).pop() ?? metadata.name;
           updateDownload(id, {
-            name: metadata.name,
+            name,
             size: metadata.size,
             supportsRanges: metadata.supportsRanges,
             ...(metadata.mimeType ? { mimeType: metadata.mimeType } : {}),
             chunks: segments,
             prepared: true,
-            category: detectCategory(metadata.name),
+            category: detectCategory(name),
           });
         })
         .catch((error: unknown) => {
           updateDownload(id, { status: "error", errorMessage: getErrorMessage(error), speed: 0 });
         });
+      return true;
     },
-    [updateDownload],
+    [settings.askWhereToSave, updateDownload],
   );
   useEffect(() => {
-    externalDownloadHandler.current = (url) =>
-      add(url, settings.defaultThreads, settings.defaultDir);
+    externalDownloadHandler.current = (url) => {
+      void add(url, settings.defaultThreads, settings.defaultDir).catch((error: unknown) =>
+        console.error("Could not start the external download.", error),
+      );
+    };
   }, [add, settings.defaultDir, settings.defaultThreads]);
 
   const pause = useCallback(
@@ -396,7 +476,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
     async (id: string) => {
       const item = downloads.find((download) => download.id === id);
       if (!item) throw new Error("Download not found.");
-      await openDownloadFolder(item.path, item.name);
+      await openDownloadFolder(item.path, item.name, item.targetPath);
     },
     [downloads],
   );

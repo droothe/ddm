@@ -62,8 +62,13 @@ fn resolve_download_destination(value: &str, app: &tauri::AppHandle) -> Result<P
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = app;
-        resolve_destination(value)
+        if value.trim().is_empty() {
+            app.path()
+                .download_dir()
+                .map_err(|error| format!("Could not find the system Downloads directory: {error}"))
+        } else {
+            resolve_destination(value)
+        }
     }
 }
 
@@ -281,6 +286,7 @@ async fn start_download(
     manager: State<'_, DownloadManager>,
     url: String,
     save_path: String,
+    target_path: Option<String>,
     thread_count: u8,
     download_id: String,
     speed_limit_bytes_per_second: u64,
@@ -291,17 +297,46 @@ async fn start_download(
     if download_id.is_empty() || download_id.len() > 128 {
         return Err("Download ID is invalid.".to_owned());
     }
-    let destination_dir = resolve_download_destination(&save_path, &app)?;
+    let selected_target = target_path
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| {
+            let selected_path = PathBuf::from(path);
+            if !selected_path.is_absolute() {
+                return Err("The selected download path must be absolute.".to_owned());
+            }
+            let parent = selected_path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .ok_or_else(|| "The selected download path has no parent directory.".to_owned())?
+                .to_path_buf();
+            let name = selected_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(safe_file_name)
+                .ok_or_else(|| "The selected download path has no valid file name.".to_owned())?;
+            let selected_path = parent.join(&name);
+            Ok((parent, selected_path, name))
+        })
+        .transpose()?;
+    let destination_dir = match &selected_target {
+        Some((parent, _, _)) => parent.clone(),
+        None => resolve_download_destination(&save_path, &app)?,
+    };
     if destination_dir.as_os_str().is_empty() {
         return Err("A destination directory is required.".to_owned());
     }
 
-    let metadata = probe_url(&manager.client, &url).await?;
+    let mut metadata = probe_url(&manager.client, &url).await?;
+    if let Some((_, _, name)) = &selected_target {
+        metadata.name = name.clone();
+    }
     fs::create_dir_all(&destination_dir)
         .await
         .map_err(|error| format!("Could not create the destination directory: {error}"))?;
 
-    let file_path = destination_dir.join(&metadata.name);
+    let file_path = selected_target
+        .map(|(_, selected_path, _)| selected_path)
+        .unwrap_or_else(|| destination_dir.join(&metadata.name));
     let segment_count = if metadata.supports_ranges {
         thread_count as usize
     } else {
@@ -415,9 +450,17 @@ async fn cancel_download(
     .map_err(|error| format!("Could not notify the frontend: {error}"))
 }
 
-#[tauri::command]
-async fn show_download_in_folder(path: String, name: String) -> Result<(), String> {
-    let file_path = resolve_destination(&path)?.join(safe_file_name(&name));
+#[tauri::command(rename_all = "camelCase")]
+async fn show_download_in_folder(
+    path: String,
+    name: String,
+    target_path: Option<String>,
+) -> Result<(), String> {
+    let file_path = match target_path {
+        Some(path) if Path::new(&path).is_absolute() => PathBuf::from(path),
+        Some(_) => return Err("The selected download path must be absolute.".to_owned()),
+        None => resolve_destination(&path)?.join(safe_file_name(&name)),
+    };
     #[cfg(target_os = "windows")]
     let result = Command::new("explorer.exe")
         .arg("/select,")
@@ -433,6 +476,14 @@ async fn show_download_in_folder(path: String, name: String) -> Result<(), Strin
     result
         .map(|_| ())
         .map_err(|error| format!("Could not open the download location: {error}"))
+}
+
+#[tauri::command]
+fn default_download_directory(app: tauri::AppHandle) -> Result<String, String> {
+    app.path()
+        .download_dir()
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| format!("Could not find the system Downloads directory: {error}"))
 }
 
 fn basic_progress(
@@ -1059,6 +1110,7 @@ pub fn run() {
     builder
         .manage(DownloadManager::default())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(
@@ -1079,6 +1131,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            default_download_directory,
             check_url_headers,
             extract_media_url,
             start_download,

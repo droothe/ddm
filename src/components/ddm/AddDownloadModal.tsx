@@ -26,6 +26,8 @@ export function AddDownloadModal({
   const [threads, setThreads] = useState(settings.defaultThreads);
   const [path, setPath] = useState(settings.defaultDir);
   const [pasteMsg, setPasteMsg] = useState("");
+  const [addError, setAddError] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
 
   const paste = useCallback(async () => {
     try {
@@ -44,6 +46,7 @@ export function AddDownloadModal({
       setThreads(settings.defaultThreads);
       setPath(settings.defaultDir);
       setUrl(initialUrl ?? "");
+      setAddError("");
       if (initialUrl) void resolveSharedMedia(initialUrl);
       if (!initialUrl) void paste();
     }
@@ -128,21 +131,37 @@ export function AddDownloadModal({
         )}
 
         <label className="mt-5 block text-xs uppercase tracking-wider text-muted-foreground">
-          {isAndroid ? "App storage subfolder" : "Save directory"}
+          {isAndroid ? "App storage subfolder" : "Download directory"}
         </label>
-        <div className="mt-1.5 flex items-center gap-2 rounded-md border border-input bg-background px-3">
-          <FolderOpen className="h-4 w-4 text-muted-foreground" />
-          <input
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            className="flex-1 bg-transparent py-2 font-mono text-sm outline-none"
-          />
-        </div>
+        {isAndroid ? (
+          <div className="mt-1.5 flex items-center gap-2 rounded-md border border-input bg-background px-3">
+            <FolderOpen className="h-4 w-4 text-muted-foreground" />
+            <input
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              className="flex-1 bg-transparent py-2 font-mono text-sm outline-none"
+            />
+          </div>
+        ) : (
+          <div className="mt-1.5 flex items-center gap-2 rounded-md border border-input bg-background px-3">
+            <FolderOpen className="h-4 w-4 text-muted-foreground" />
+            <input
+              readOnly
+              value={settings.defaultDir || "System Downloads folder"}
+              className="flex-1 bg-transparent py-2 font-mono text-sm outline-none"
+            />
+          </div>
+        )}
         <p className="mt-1 text-xs text-muted-foreground">
           {isAndroid
             ? "Downloads are staged privately, then copied to Movies, Music, or Downloads through Android MediaStore. Use a relative subfolder."
             : "The browser saves to its configured download location; a custom directory requires the native app."}
         </p>
+        {addError && (
+          <p className="mt-2 text-sm text-destructive" role="alert">
+            {addError}
+          </p>
+        )}
 
         <div className="mt-5 flex justify-between text-xs uppercase tracking-wider text-muted-foreground">
           <span>Threads</span>
@@ -179,14 +198,28 @@ export function AddDownloadModal({
             Cancel
           </button>
           <button
-            disabled={!valid || awaitingSharedMedia}
-            onClick={() => {
-              add(sharedMedia?.url ?? url.trim(), threads, path.trim());
-              onClose();
+            onClick={async () => {
+              setIsAdding(true);
+              setAddError("");
+              try {
+                const added = await add(
+                  sharedMedia?.url ?? url.trim(),
+                  threads,
+                  isAndroid ? path.trim() : settings.defaultDir,
+                );
+                if (added) onClose();
+              } catch (error) {
+                setAddError(
+                  error instanceof Error ? error.message : "Could not start the download.",
+                );
+              } finally {
+                setIsAdding(false);
+              }
             }}
             className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40 glow"
+            disabled={!valid || awaitingSharedMedia || isAdding}
           >
-            Start Download
+            {isAdding ? "Choosing location..." : "Start Download"}
           </button>
         </div>
       </div>

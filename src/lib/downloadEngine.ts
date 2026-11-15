@@ -1,3 +1,4 @@
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type { DownloadItem, Status, ThreadSegment } from "./ddm-store";
 
 export interface DownloadMetadata {
@@ -92,6 +93,30 @@ export async function readClipboardText(): Promise<string> {
     throw new Error("Clipboard access is not available in this environment.");
   }
   return navigator.clipboard.readText();
+}
+
+export async function getDefaultDownloadDirectory(): Promise<string> {
+  if (!isTauriRuntime() || isAndroidTauriRuntime()) return "";
+  return invoke<string>("default_download_directory");
+}
+
+export async function chooseDownloadDirectory(defaultPath?: string): Promise<string | null> {
+  if (!isTauriRuntime() || isAndroidTauriRuntime()) {
+    throw new Error("Choosing a download directory requires the desktop app.");
+  }
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    ...(defaultPath ? { defaultPath } : {}),
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function chooseDownloadTarget(defaultPath: string): Promise<string | null> {
+  if (!isTauriRuntime() || isAndroidTauriRuntime()) {
+    throw new Error("Choosing a download file requires the desktop app.");
+  }
+  return save({ defaultPath });
 }
 
 function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -295,6 +320,7 @@ export async function startDownload(item: DownloadItem): Promise<void> {
     await invoke<void>("start_download", {
       url: item.url,
       savePath: item.path,
+      targetPath: item.targetPath ?? null,
       threadCount: item.threads,
       downloadId: item.id,
       speedLimitBytesPerSecond,
@@ -377,7 +403,11 @@ export async function cancelDownload(id: string): Promise<void> {
   browserTasks.delete(id);
 }
 
-export async function openDownloadFolder(path: string, name: string): Promise<void> {
+export async function openDownloadFolder(
+  path: string,
+  name: string,
+  targetPath?: string,
+): Promise<void> {
   if (!isTauriRuntime()) {
     throw new Error(
       "Opening a local folder requires the native Tauri app. Browser downloads use the browser's save location.",
@@ -390,7 +420,7 @@ export async function openDownloadFolder(path: string, name: string): Promise<vo
     await invoke<void>("plugin:share-intent|openMediaStoreItem", { uri: path });
     return;
   }
-  await invoke<void>("show_download_in_folder", { path, name });
+  await invoke<void>("show_download_in_folder", { path, name, targetPath: targetPath ?? null });
 }
 
 export async function publishDownloadToAndroid(
