@@ -152,6 +152,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
   const [shareError, setShareError] = useState<string | null>(null);
   const [extension, setExtension] = useState<"listening" | "unavailable">("unavailable");
   const [engine, setEngine] = useState<"browser" | "tauri">("browser");
+  const externalDownloadHandler = useRef<((url: string) => void) | null>(null);
   const downloadsRef = useRef(downloads);
   downloadsRef.current = downloads;
   const starting = useRef(new Set<string>());
@@ -223,7 +224,14 @@ export function DDMProvider({ children }: { children: ReactNode }) {
           items.map((item) => (item.id === event.id ? applyProgress(item, event) : item)),
         );
       }),
-      listenForExternalDownloads((url) => setExternalUrl(url)),
+      listenForExternalDownloads((url) => {
+        const handler = externalDownloadHandler.current;
+        if (!handler) {
+          console.error("Received an external download before the download handler was ready.");
+          return;
+        }
+        handler(url);
+      }),
     ])
       .then(([stopProgress, stopExternal]) => {
         if (disposed) {
@@ -314,6 +322,10 @@ export function DDMProvider({ children }: { children: ReactNode }) {
     },
     [updateDownload],
   );
+  useEffect(() => {
+    externalDownloadHandler.current = (url) =>
+      add(url, settings.defaultThreads, settings.defaultDir);
+  }, [add, settings.defaultDir, settings.defaultThreads]);
 
   const pause = useCallback(
     (id: string) => {

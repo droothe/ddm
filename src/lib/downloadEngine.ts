@@ -84,6 +84,16 @@ export function isAndroidTauriRuntime(): boolean {
   return isTauriRuntime() && typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
 }
 
+export async function readClipboardText(): Promise<string> {
+  if (isTauriRuntime()) {
+    return invoke<string>("plugin:clipboard-manager|read_text");
+  }
+  if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
+    throw new Error("Clipboard access is not available in this environment.");
+  }
+  return navigator.clipboard.readText();
+}
+
 function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const tauriInvoke = typeof window !== "undefined" ? window.__TAURI__?.core?.invoke : undefined;
   if (!tauriInvoke) throw new Error("The Tauri download backend is not available in this browser.");

@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Default capability for the DDM desktop window",
   "windows": ["main"],
-  "permissions": ["core:default", "core:event:default", "deep-link:default", "notification:default"]
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "clipboard-manager:allow-read-text",
+    "deep-link:default",
+    "notification:default"
+  ]
 }

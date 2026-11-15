@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ClipboardPaste, FolderOpen, X } from "lucide-react";
 import { detectCategory, fileNameFromUrl, useDDM, type Category } from "@/lib/ddm-store";
-import { isAndroidTauriRuntime } from "@/lib/downloadEngine";
+import { isAndroidTauriRuntime, isTauriRuntime, readClipboardText } from "@/lib/downloadEngine";
 import { CategoryIcon } from "./CategoryIcon";
 
 const CATS: { key: Category; label: string }[] = [
@@ -29,7 +29,7 @@ export function AddDownloadModal({
 
   const paste = useCallback(async () => {
     try {
-      const t = await navigator.clipboard.readText();
+      const t = await readClipboardText();
       if (t) {
         setUrl(t.trim());
         setPasteMsg("");
@@ -89,6 +89,16 @@ export function AddDownloadModal({
             autoFocus
             value={url}
             onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(event) => {
+              if (
+                isTauriRuntime() &&
+                (event.ctrlKey || event.metaKey) &&
+                event.key.toLowerCase() === "v"
+              ) {
+                event.preventDefault();
+                void paste();
+              }
+            }}
             placeholder="https://example.com/file.zip"
             className="flex-1 rounded-md border border-input bg-background px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-ring"
           />
