@@ -95,7 +95,57 @@ describe("external downloads", () => {
         <SettingsProbe />
       </DDMProvider>,
     );
-    expect(await screen.findByRole("button", { name: "C:\\Users\\user\\Downloads|true" })).toBeVisible();
+    expect(
+      await screen.findByRole("button", { name: "C:\\Users\\user\\Downloads|true" }),
+    ).toBeVisible();
+  });
+
+  it("persists the selected interface language", async () => {
+    window.localStorage.setItem("ddm-settings-v1", JSON.stringify({ language: "en" }));
+
+    function LanguageProbe() {
+      const { settings, setSettings, t } = useDDM();
+      return (
+        <>
+          <select
+            aria-label="Language"
+            value={settings.language}
+            onChange={(event) => {
+              const language = event.currentTarget.value;
+              if (language === "en" || language === "tr") setSettings({ language });
+            }}
+          >
+            <option value="en">English</option>
+            <option value="tr">Türkçe</option>
+          </select>
+          <p>{t("dashboard")}</p>
+        </>
+      );
+    }
+
+    const firstRender = render(
+      <DDMProvider>
+        <LanguageProbe />
+      </DDMProvider>,
+    );
+    const languageSelect = await screen.findByRole("combobox", { name: "Language" });
+    fireEvent.change(languageSelect, { target: { value: "tr" } });
+
+    expect(await screen.findByText("İndirmeler")).toBeVisible();
+    await waitFor(() =>
+      expect(JSON.parse(window.localStorage.getItem("ddm-settings-v1") ?? "{}")).toMatchObject({
+        language: "tr",
+      }),
+    );
+    expect(document.documentElement).toHaveAttribute("lang", "tr");
+    firstRender.unmount();
+
+    render(
+      <DDMProvider>
+        <LanguageProbe />
+      </DDMProvider>,
+    );
+    expect(await screen.findByRole("combobox", { name: "Language" })).toHaveValue("tr");
   });
 
   it("does not queue an external download when the save dialog is cancelled", async () => {

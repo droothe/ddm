@@ -10,29 +10,53 @@ import {
   type Download,
   type Status,
 } from "@/lib/ddm-store";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import type { TranslationKey } from "@/lib/i18n";
 import { CategoryIcon } from "./CategoryIcon";
 
-const STATUS: Record<Status, { label: string; cls: string; bar: string }> = {
-  downloading: { label: "Downloading", cls: "text-primary border-primary/40", bar: "bg-primary" },
-  paused: { label: "Paused", cls: "text-warning border-warning/40", bar: "bg-warning" },
-  completed: { label: "Completed", cls: "text-success border-success/40", bar: "bg-success" },
-  merging: { label: "Merging Segments", cls: "text-merge border-merge/40", bar: "bg-merge" },
-  error: { label: "Error", cls: "text-destructive border-destructive/40", bar: "bg-destructive" },
+const STATUS: Record<Status, { label: TranslationKey; cls: string; bar: string }> = {
+  downloading: {
+    label: "statusDownloading",
+    cls: "text-primary border-primary/40",
+    bar: "bg-primary",
+  },
+  paused: { label: "statusPaused", cls: "text-warning border-warning/40", bar: "bg-warning" },
+  completed: {
+    label: "statusCompleted",
+    cls: "text-success border-success/40",
+    bar: "bg-success",
+  },
+  merging: { label: "statusMerging", cls: "text-merge border-merge/40", bar: "bg-merge" },
+  error: {
+    label: "statusError",
+    cls: "text-destructive border-destructive/40",
+    bar: "bg-destructive",
+  },
   queued: {
-    label: "Queued",
+    label: "statusQueued",
     cls: "text-muted-foreground border-border",
     bar: "bg-muted-foreground",
   },
   cancelled: {
-    label: "Cancelled",
+    label: "statusCancelled",
     cls: "text-muted-foreground border-border",
     bar: "bg-muted-foreground",
   },
 };
 
 export function DownloadRow({ d }: { d: Download }) {
-  const { pause, resume, cancel, remove, openFolder: revealFolder } = useDDM();
+  const { pause, resume, cancel, remove, openFolder: revealFolder, settings, t } = useDDM();
   const [open, setOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [toast, setToast] = useState("");
   const p = progress(d);
   const s = STATUS[d.status];
@@ -40,9 +64,9 @@ export function DownloadRow({ d }: { d: Download }) {
 
   const openFolder = () => {
     void revealFolder(d.id)
-      .then(() => setToast(`Opened ${d.path}`))
+      .then(() => setToast(t("openedFolder", { path: d.path })))
       .catch((error: unknown) =>
-        setToast(error instanceof Error ? error.message : "Could not open the download folder."),
+        setToast(error instanceof Error ? error.message : t("couldNotOpenDownloadFolder")),
       );
   };
 
@@ -65,7 +89,7 @@ export function DownloadRow({ d }: { d: Download }) {
 
         <div className="flex-1">
           <div className="flex justify-between text-xs mb-1.5">
-            <span className={`rounded-full border px-2 py-0.5 ${s.cls}`}>{s.label}</span>
+            <span className={`rounded-full border px-2 py-0.5 ${s.cls}`}>{t(s.label)}</span>
             <span className="font-mono text-card-foreground">{(p * 100).toFixed(1)}%</span>
           </div>
           <div className="h-2 rounded-full bg-muted overflow-hidden">
@@ -76,33 +100,36 @@ export function DownloadRow({ d }: { d: Download }) {
           </div>
           <div className="mt-1.5 flex gap-4 text-xs font-mono text-muted-foreground">
             <span>{d.status === "downloading" ? fmtSpeed(d.speed) : "0.00 MB/s"}</span>
-            <span>ETA {d.status === "downloading" ? fmtEta(d.size - done, d.speed) : "—"}</span>
-            <span>{d.threads} threads</span>
+            <span>
+              {t("eta")}{" "}
+              {d.status === "downloading" ? fmtEta(d.size - done, d.speed, settings.language) : "—"}
+            </span>
+            <span>{t("threadCount", { count: d.threads })}</span>
           </div>
         </div>
 
         <div className="flex items-center gap-1">
           {d.status === "downloading" || d.status === "queued" ? (
-            <Btn label="Pause" onClick={() => pause(d.id)}>
+            <Btn label={t("pause")} onClick={() => pause(d.id)}>
               <Pause className="h-4 w-4" />
             </Btn>
           ) : (d.status === "paused" || d.status === "error") && d.prepared ? (
-            <Btn label="Resume" onClick={() => resume(d.id)}>
+            <Btn label={t("resume")} onClick={() => resume(d.id)}>
               <Play className="h-4 w-4" />
             </Btn>
           ) : null}
           {d.status !== "completed" && d.status !== "cancelled" && (
-            <Btn label="Cancel" onClick={() => cancel(d.id)}>
+            <Btn label={t("cancel")} onClick={() => cancel(d.id)}>
               <X className="h-4 w-4" />
             </Btn>
           )}
-          <Btn label="Open Folder" onClick={openFolder}>
+          <Btn label={t("openFolder")} onClick={openFolder}>
             <FolderOpen className="h-4 w-4" />
           </Btn>
-          <Btn label="Delete" danger onClick={() => remove(d.id)}>
+          <Btn label={t("delete")} danger onClick={() => setDeleteOpen(true)}>
             <Trash2 className="h-4 w-4" />
           </Btn>
-          <Btn label="Segments" onClick={() => setOpen((o) => !o)}>
+          <Btn label={t("segments")} onClick={() => setOpen((o) => !o)}>
             <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
           </Btn>
         </div>
@@ -110,6 +137,23 @@ export function DownloadRow({ d }: { d: Download }) {
       {d.errorMessage && <p className="mt-2 text-sm text-destructive">{d.errorMessage}</p>}
       {toast && <div className="mt-2 text-xs text-primary font-mono">{toast}</div>}
       {open && <SegmentVisualizer d={d} />}
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent className="border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("confirmDeleteTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("confirmDeleteDescription")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => remove(d.id)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {t("confirmDelete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -138,15 +182,19 @@ function Btn({
 }
 
 function SegmentVisualizer({ d }: { d: Download }) {
+  const { t } = useDDM();
   const [hover, setHover] = useState<number | null>(null);
   return (
     <div className="mt-4 border-t border-border pt-4">
       <div className="flex justify-between text-xs text-muted-foreground mb-2">
-        <span className="uppercase tracking-wider">HTTP Range segments</span>
+        <span className="uppercase tracking-wider">{t("httpRangeSegments")}</span>
         <span className="font-mono">
           {hover !== null && d.chunks[hover]
-            ? `Chunk ${hover + 1}: ${((d.chunks[hover]!.done / d.chunks[hover]!.size) * 100).toFixed(1)}%`
-            : "Hover a chunk"}
+            ? t("chunkProgress", {
+                number: hover + 1,
+                percent: ((d.chunks[hover]!.done / d.chunks[hover]!.size) * 100).toFixed(1),
+              })
+            : t("hoverAChunk")}
         </span>
       </div>
       <div className="flex gap-1 h-6">
@@ -157,7 +205,7 @@ function SegmentVisualizer({ d }: { d: Download }) {
               key={i}
               onMouseEnter={() => setHover(i)}
               onMouseLeave={() => setHover(null)}
-              className={`flex-1 rounded-sm bg-muted overflow-hidden cursor-pointer ring-primary ${hover === i ? "ring-1" : ""}`}
+              className={`flex-1 rounded-sm bg-muted overflow-hidden ring-primary ${hover === i ? "ring-1" : ""}`}
             >
               <div
                 className={`h-full transition-all duration-500 ${pc >= 1 ? "bg-success" : "bg-primary"}`}

@@ -29,6 +29,13 @@ import {
   type EngineProgress,
 } from "./downloadEngine";
 import { useShareIntent } from "@/hooks/useShareIntent";
+import {
+  detectPreferredLanguage,
+  translate,
+  type Language,
+  type TranslationKey,
+  type TranslationValues,
+} from "@/lib/i18n";
 
 export type Status =
   "downloading" | "paused" | "completed" | "merging" | "error" | "queued" | "cancelled";
@@ -62,6 +69,7 @@ export interface DownloadItem {
 export type Download = DownloadItem;
 
 export interface Settings {
+  language: Language;
   defaultDir: string;
   askWhereToSave: boolean;
   maxConcurrent: number;
@@ -115,6 +123,7 @@ interface DDMContextValue {
   downloads: DownloadItem[];
   settings: Settings;
   setSettings: (settings: Partial<Settings>) => void;
+  t: (key: TranslationKey, values?: TranslationValues) => string;
   add: (url: string, threads: number, path: string) => Promise<boolean>;
   pause: (id: string) => void;
   resume: (id: string) => void;
@@ -136,6 +145,7 @@ interface DDMContextValue {
 const DDMContext = createContext<DDMContextValue | null>(null);
 
 const INITIAL_SETTINGS: Settings = {
+  language: "en",
   defaultDir: "",
   askWhereToSave: false,
   maxConcurrent: 3,
@@ -148,25 +158,27 @@ function parseSettings(value: string): Settings {
   const saved: unknown = JSON.parse(value);
   if (!isRecord(saved)) return INITIAL_SETTINGS;
   return {
+    language: isLanguage(saved["language"]) ? saved["language"] : detectPreferredLanguage(),
     defaultDir:
       typeof saved["defaultDir"] === "string" ? saved["defaultDir"] : INITIAL_SETTINGS.defaultDir,
     askWhereToSave:
       typeof saved["askWhereToSave"] === "boolean"
         ? saved["askWhereToSave"]
         : INITIAL_SETTINGS.askWhereToSave,
-    maxConcurrent:
-      isNumberInRange(saved["maxConcurrent"], 1, 10)
-        ? saved["maxConcurrent"]
-        : INITIAL_SETTINGS.maxConcurrent,
-    defaultThreads:
-      isNumberInRange(saved["defaultThreads"], 1, 16)
-        ? saved["defaultThreads"]
-        : INITIAL_SETTINGS.defaultThreads,
-    speedLimitMB:
-      isNumberInRange(saved["speedLimitMB"], 0, 50)
-        ? saved["speedLimitMB"]
-        : INITIAL_SETTINGS.speedLimitMB,
+    maxConcurrent: isNumberInRange(saved["maxConcurrent"], 1, 10)
+      ? saved["maxConcurrent"]
+      : INITIAL_SETTINGS.maxConcurrent,
+    defaultThreads: isNumberInRange(saved["defaultThreads"], 1, 16)
+      ? saved["defaultThreads"]
+      : INITIAL_SETTINGS.defaultThreads,
+    speedLimitMB: isNumberInRange(saved["speedLimitMB"], 0, 50)
+      ? saved["speedLimitMB"]
+      : INITIAL_SETTINGS.speedLimitMB,
   };
+}
+
+function isLanguage(value: unknown): value is Language {
+  return value === "en" || value === "tr";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -197,6 +209,10 @@ export function DDMProvider({ children }: { children: ReactNode }) {
   const [shareError, setShareError] = useState<string | null>(null);
   const [extension, setExtension] = useState<"listening" | "unavailable">("unavailable");
   const [engine, setEngine] = useState<"browser" | "tauri">("browser");
+  const t = useCallback(
+    (key: TranslationKey, values?: TranslationValues) => translate(settings.language, key, values),
+    [settings.language],
+  );
   const externalDownloadHandler = useRef<((url: string) => void) | null>(null);
   const downloadsRef = useRef(downloads);
   downloadsRef.current = downloads;
@@ -232,6 +248,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
     try {
       const saved = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
       if (saved) setSettingsState(parseSettings(saved));
+      else setSettingsState({ ...INITIAL_SETTINGS, language: detectPreferredLanguage() });
     } catch (error) {
       console.error("Could not load saved settings.", error);
     } finally {
@@ -247,6 +264,10 @@ export function DDMProvider({ children }: { children: ReactNode }) {
       console.error("Could not save settings.", error);
     }
   }, [settings, settingsLoaded]);
+
+  useEffect(() => {
+    document.documentElement.lang = settings.language;
+  }, [settings.language]);
 
   useEffect(() => {
     setGlobalSpeedLimit(settings.speedLimitMB);
@@ -268,7 +289,9 @@ export function DDMProvider({ children }: { children: ReactNode }) {
               .then(({ uri }) => {
                 setDownloads((items) =>
                   items.map((download) =>
-                    download.id === item.id ? { ...download, path: uri, errorMessage: "" } : download,
+                    download.id === item.id
+                      ? { ...download, path: uri, errorMessage: "" }
+                      : download,
                   ),
                 );
               })
@@ -277,7 +300,10 @@ export function DDMProvider({ children }: { children: ReactNode }) {
                 setDownloads((items) =>
                   items.map((download) =>
                     download.id === item.id
-                      ? { ...download, errorMessage: `Downloaded, but could not save to Android media storage: ${message}` }
+                      ? {
+                          ...download,
+                          errorMessage: `Downloaded, but could not save to Android media storage: ${message}`,
+                        }
                       : download,
                   ),
                 );
@@ -380,8 +406,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
             metadata.size,
             metadata.supportsRanges ? threads : 1,
           );
-          const name =
-            targetPath?.split(/[\\/]/).filter(Boolean).pop() ?? metadata.name;
+          const name = targetPath?.split(/[\\/]/).filter(Boolean).pop() ?? metadata.name;
           updateDownload(id, {
             name,
             size: metadata.size,
@@ -487,6 +512,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
       downloads,
       settings,
       setSettings: (update) => setSettingsState((current) => ({ ...current, ...update })),
+      t,
       add,
       pause,
       resume,
@@ -533,6 +559,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
     resume,
     resumeAll,
     settings,
+    t,
   ]);
 
   return <DDMContext.Provider value={value}>{children}</DDMContext.Provider>;
@@ -561,12 +588,20 @@ export function fmtBytes(bytes: number) {
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
 export const fmtSpeed = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(2)} MB/s`;
-export function fmtEta(remaining: number, speed: number) {
+export function fmtEta(remaining: number, speed: number, language: Language = "en") {
   if (!speed) return "—";
   const seconds = Math.round(remaining / speed);
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  if (seconds < 60) return translate(language, "seconds", { value: seconds });
+  if (seconds < 3600) {
+    return translate(language, "minutesSeconds", {
+      minutes: Math.floor(seconds / 60),
+      seconds: seconds % 60,
+    });
+  }
+  return translate(language, "hoursMinutes", {
+    hours: Math.floor(seconds / 3600),
+    minutes: Math.floor((seconds % 3600) / 60),
+  });
 }
 
 export type { DirectMedia, DownloadMetadata };

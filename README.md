@@ -21,6 +21,7 @@ DDM combines a React and TypeScript download dashboard with a Rust-powered Tauri
 - **Multi-segment downloads:** the native engine splits servers that support HTTP byte ranges into concurrent segments, tracks live progress, and merges the finished file.
 - **Pause, resume, cancel, and queue controls:** manage individual downloads or pause and resume the queue together.
 - **Speed and concurrency controls:** choose the number of segments and set a global speed limit.
+- **English and Turkish interface:** the UI follows the system language when supported and can be changed in Settings.
 - **Browser and native engines:** the web UI can run without Tauri; the desktop and Android hosts provide native download and storage capabilities.
 - **Android share intents:** share a link from another Android app to DDM. Direct audio and video URLs can be previewed before downloading.
 - **Android MediaStore publishing:** completed files are saved to the appropriate public media collection without broad storage permissions on Android 10 and newer.

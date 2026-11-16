@@ -2,14 +2,19 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import { ClipboardPaste, FolderOpen, X } from "lucide-react";
 import { detectCategory, fileNameFromUrl, useDDM, type Category } from "@/lib/ddm-store";
-import { isAndroidTauriRuntime, readClipboardText } from "@/lib/downloadEngine";
+import {
+  chooseDownloadDirectory,
+  isAndroidTauriRuntime,
+  readClipboardText,
+} from "@/lib/downloadEngine";
+import type { TranslationKey } from "@/lib/i18n";
 import { CategoryIcon } from "./CategoryIcon";
 
-const CATS: { key: Category; label: string }[] = [
-  { key: "video", label: "Video" },
-  { key: "archive", label: "Zip/Archive" },
-  { key: "executable", label: "Executable" },
-  { key: "audio", label: "Audio" },
+const CATS: { key: Category; label: TranslationKey }[] = [
+  { key: "video", label: "video" },
+  { key: "archive", label: "archive" },
+  { key: "executable", label: "executable" },
+  { key: "audio", label: "audio" },
 ];
 
 export function AddDownloadModal({
@@ -21,24 +26,26 @@ export function AddDownloadModal({
   onClose: () => void;
   initialUrl?: string;
 }) {
-  const { add, settings, sharedMedia, shareError, resolveSharedMedia } = useDDM();
+  const { add, settings, sharedMedia, shareError, resolveSharedMedia, t } = useDDM();
   const isAndroid = isAndroidTauriRuntime();
+  const isDesktopTauri = isTauri() && !isAndroid;
   const [url, setUrl] = useState("");
   const [threads, setThreads] = useState(settings.defaultThreads);
   const [path, setPath] = useState(settings.defaultDir);
-  const [pasteMsg, setPasteMsg] = useState("");
+  const [pasteBlocked, setPasteBlocked] = useState(false);
+  const [directoryError, setDirectoryError] = useState("");
   const [addError, setAddError] = useState("");
   const [isAdding, setIsAdding] = useState(false);
 
   const paste = useCallback(async () => {
     try {
       const t = await readClipboardText();
+      setPasteBlocked(false);
       if (t) {
         setUrl(t.trim());
-        setPasteMsg("");
       }
     } catch {
-      setPasteMsg("Clipboard access blocked — paste manually (Ctrl+V).");
+      setPasteBlocked(true);
     }
   }, []);
 
@@ -47,11 +54,22 @@ export function AddDownloadModal({
       setThreads(settings.defaultThreads);
       setPath(settings.defaultDir);
       setUrl(initialUrl ?? "");
+      setDirectoryError("");
       setAddError("");
+      setPasteBlocked(false);
       if (initialUrl) void resolveSharedMedia(initialUrl);
-      if (!initialUrl) void paste();
     }
-  }, [open, initialUrl, paste, resolveSharedMedia, settings.defaultDir, settings.defaultThreads]);
+  }, [open, initialUrl, resolveSharedMedia, settings.defaultDir, settings.defaultThreads]);
+
+  const browseDirectory = async () => {
+    setDirectoryError("");
+    try {
+      const directory = await chooseDownloadDirectory(path || undefined);
+      if (directory) setPath(directory);
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : t("couldNotOpenFolderPicker"));
+    }
+  };
 
   if (!open) return null;
   const valid = (() => {
@@ -75,25 +93,28 @@ export function AddDownloadModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-download-title"
-        className="pointer-events-auto relative z-[101] w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-2xl"
+        className="pointer-events-auto relative z-[101] max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-5">
           <h2 id="add-download-title" className="text-lg font-semibold text-card-foreground">
-            New Download
+            {t("newDownload")}
           </h2>
           <button
             type="button"
             onClick={onClose}
             className="text-muted-foreground hover:text-foreground"
-            aria-label="Close"
+            aria-label={t("close")}
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <label htmlFor="download-url" className="text-xs uppercase tracking-wider text-muted-foreground">
-          URL (DDL / Video)
+        <label
+          htmlFor="download-url"
+          className="text-xs uppercase tracking-wider text-muted-foreground"
+        >
+          {t("urlDdlVideo")}
         </label>
         <div className="mt-1.5 flex gap-2">
           <input
@@ -116,21 +137,26 @@ export function AddDownloadModal({
           />
           <button
             type="button"
-            onClick={paste}
+            onClick={() => void paste()}
             className="rounded-md border border-input px-3 text-muted-foreground hover:text-primary"
-            aria-label="Paste"
+            aria-label={t("paste")}
           >
             <ClipboardPaste className="h-4 w-4" />
           </button>
         </div>
-        {pasteMsg && <p className="mt-1 text-xs text-warning">{pasteMsg}</p>}
+        {pasteBlocked && <p className="mt-1 text-xs text-warning">{t("clipboardBlocked")}</p>}
         {initialUrl && sharedMedia && (
           <div className="mt-4 rounded-lg border border-border bg-background p-3">
             <p className="mb-2 truncate text-xs text-muted-foreground">
-              Preview: {sharedMedia.name} ({sharedMedia.mimeType})
+              {t("preview")} {sharedMedia.name} ({sharedMedia.mimeType})
             </p>
             {sharedMedia.mimeType.startsWith("video/") ? (
-              <video className="max-h-56 w-full rounded-md bg-black" src={sharedMedia.url} controls playsInline />
+              <video
+                className="max-h-56 w-full rounded-md bg-black"
+                src={sharedMedia.url}
+                controls
+                playsInline
+              />
             ) : (
               <audio className="w-full" src={sharedMedia.url} controls />
             )}
@@ -141,7 +167,7 @@ export function AddDownloadModal({
         )}
 
         <label className="mt-5 block text-xs uppercase tracking-wider text-muted-foreground">
-          {isAndroid ? "App storage subfolder" : "Download directory"}
+          {isAndroid ? t("appStorageSubfolder") : t("downloadDirectory")}
         </label>
         {isAndroid ? (
           <div className="mt-1.5 flex items-center gap-2 rounded-md border border-input bg-background px-3">
@@ -156,18 +182,32 @@ export function AddDownloadModal({
           <div className="mt-1.5 flex items-center gap-2 rounded-md border border-input bg-background px-3">
             <FolderOpen className="h-4 w-4 text-muted-foreground" />
             <input
+              aria-label={t("downloadDirectory")}
               readOnly
-              value={settings.defaultDir || "System Downloads folder"}
-              className="flex-1 bg-transparent py-2 font-mono text-sm outline-none"
+              value={path || t("systemDownloadsFolder")}
+              className="min-w-0 flex-1 bg-transparent py-2 font-mono text-sm outline-none"
             />
+            <button
+              type="button"
+              onClick={() => void browseDirectory()}
+              disabled={!isDesktopTauri}
+              className="shrink-0 rounded-md border border-input px-3 py-1.5 text-sm text-muted-foreground hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t("browse")}
+            </button>
           </div>
+        )}
+        {directoryError && (
+          <p className="mt-2 text-sm text-destructive" role="alert">
+            {directoryError}
+          </p>
         )}
         <p className="mt-1 text-xs text-muted-foreground">
           {isAndroid
-            ? "Downloads are staged privately, then copied to Movies, Music, or Downloads through Android MediaStore. Use a relative subfolder."
+            ? t("androidStorageDescription")
             : isTauri()
-              ? "Downloads are saved to the selected directory by the native app."
-              : "The browser saves to its configured download location; a custom directory requires the native app."}
+              ? t("nativeDirectoryDescription")
+              : t("browserDirectoryDescription")}
         </p>
         {addError && (
           <p className="mt-2 text-sm text-destructive" role="alert">
@@ -176,7 +216,7 @@ export function AddDownloadModal({
         )}
 
         <div className="mt-5 flex justify-between text-xs uppercase tracking-wider text-muted-foreground">
-          <span>Threads</span>
+          <span>{t("threads")}</span>
           <span className="font-mono text-primary">{threads}</span>
         </div>
         <input
@@ -189,7 +229,7 @@ export function AddDownloadModal({
         />
 
         <div className="mt-5 text-xs uppercase tracking-wider text-muted-foreground">
-          Category (auto-detected)
+          {t("category")}
         </div>
         <div className="mt-2 flex flex-wrap gap-2">
           {CATS.map((c) => (
@@ -197,7 +237,7 @@ export function AddDownloadModal({
               key={c.key}
               className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs ${cat === c.key ? "border-primary bg-accent text-accent-foreground" : "border-border text-muted-foreground"}`}
             >
-              <CategoryIcon category={c.key} className="h-3.5 w-3.5" /> {c.label}
+              <CategoryIcon category={c.key} className="h-3.5 w-3.5" /> {t(c.label)}
             </span>
           ))}
         </div>
@@ -208,7 +248,7 @@ export function AddDownloadModal({
             onClick={onClose}
             className="rounded-md px-4 py-2 text-sm text-muted-foreground hover:text-foreground"
           >
-            Cancel
+            {t("cancel")}
           </button>
           <button
             type="button"
@@ -219,13 +259,11 @@ export function AddDownloadModal({
                 const added = await add(
                   sharedMedia?.url ?? url.trim(),
                   threads,
-                  isAndroid ? path.trim() : settings.defaultDir,
+                  isAndroid ? path.trim() : path.trim() || settings.defaultDir,
                 );
                 if (added) onClose();
               } catch (error) {
-                setAddError(
-                  error instanceof Error ? error.message : "Could not start the download.",
-                );
+                setAddError(error instanceof Error ? error.message : t("couldNotStartDownload"));
               } finally {
                 setIsAdding(false);
               }
@@ -233,7 +271,7 @@ export function AddDownloadModal({
             className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40 glow"
             disabled={!valid || awaitingSharedMedia || isAdding}
           >
-            {isAdding ? "Choosing location..." : "Start Download"}
+            {isAdding ? t("choosingLocation") : t("startDownload")}
           </button>
         </div>
       </div>

@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, Cpu, Plus, Settings, LayoutGrid } from "lucide-reac
 import { fmtSpeed, useDDM } from "@/lib/ddm-store";
 
 export function AppHeader({ onAdd }: { onAdd?: () => void }) {
-  const { stats, engine } = useDDM();
+  const { stats, engine, t } = useDDM();
   return (
     <header className="border-b border-border bg-card/70 backdrop-blur sticky top-0 z-30">
       <div className="mx-auto max-w-7xl px-4 py-4 flex flex-wrap items-center gap-4">
@@ -17,7 +17,7 @@ export function AppHeader({ onAdd }: { onAdd?: () => void }) {
             </div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" />
-              Engine: {engine === "tauri" ? "Native" : "Browser"}
+              {t("engine")}: {engine === "tauri" ? t("native") : t("browser")}
             </div>
           </div>
         </Link>
@@ -25,14 +25,18 @@ export function AppHeader({ onAdd }: { onAdd?: () => void }) {
         <div className="order-3 w-full md:order-none md:w-auto md:ml-auto grid grid-cols-3 gap-2 font-mono text-xs">
           <Stat
             icon={<ArrowDown className="h-3.5 w-3.5" />}
-            label="Down"
+            label={t("downloadSpeed")}
             value={fmtSpeed(stats.down)}
             accent
           />
-          <Stat icon={<ArrowUp className="h-3.5 w-3.5" />} label="Up" value={fmtSpeed(stats.up)} />
+          <Stat
+            icon={<ArrowUp className="h-3.5 w-3.5" />}
+            label={t("uploadSpeed")}
+            value={fmtSpeed(stats.up)}
+          />
           <Stat
             icon={<Cpu className="h-3.5 w-3.5" />}
-            label="Threads"
+            label={t("threads")}
             value={String(stats.threads)}
           />
         </div>
@@ -42,7 +46,7 @@ export function AppHeader({ onAdd }: { onAdd?: () => void }) {
             to="/"
             className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
             activeProps={{ className: "text-primary" }}
-            aria-label="Dashboard"
+            aria-label={t("dashboard")}
           >
             <LayoutGrid className="h-4 w-4" />
           </Link>
@@ -50,7 +54,7 @@ export function AppHeader({ onAdd }: { onAdd?: () => void }) {
             to="/settings"
             className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
             activeProps={{ className: "text-primary" }}
-            aria-label="Settings"
+            aria-label={t("settings")}
           >
             <Settings className="h-4 w-4" />
           </Link>
@@ -59,7 +63,7 @@ export function AppHeader({ onAdd }: { onAdd?: () => void }) {
               onClick={onAdd}
               className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90 glow"
             >
-              <Plus className="h-4 w-4" /> Add New Download
+              <Plus className="h-4 w-4" /> {t("addNewDownload")}
             </button>
           )}
         </nav>

@@ -65,6 +65,50 @@
 
 @layer base {
   * { border-color: var(--color-border); }
+  html,
+  body,
+  #root {
+    width: 100%;
+    min-width: 0;
+  }
+  html,
+  body {
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    display: none;
+  }
+  body,
+  #root {
+    min-height: 100vh;
+  }
+  button:not(:disabled),
+  a[href],
+  select:not(:disabled),
+  input[type="button"]:not(:disabled),
+  input[type="submit"]:not(:disabled),
+  input[type="reset"]:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  input[type="range"]:not(:disabled),
+  label[for],
+  [role="switch"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  button:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+  input:not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="checkbox"]):not(
+      [type="radio"]
+    ):not([type="range"]):not(:disabled),
+  textarea:not(:disabled) {
+    cursor: text;
+  }
   body {
     background-color: var(--color-background);
     background-image: var(--grid-bg);

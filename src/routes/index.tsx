@@ -5,6 +5,7 @@ import { AppHeader } from "@/components/ddm/AppHeader";
 import { AddDownloadModal } from "@/components/ddm/AddDownloadModal";
 import { DownloadRow } from "@/components/ddm/DownloadRow";
 import { useDDM, type Status } from "@/lib/ddm-store";
+import type { TranslationKey } from "@/lib/i18n";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -24,16 +25,16 @@ export const Route = createFileRoute("/")({
   component: Dashboard,
 });
 
-const FILTERS: { key: "all" | Status; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "downloading", label: "Active" },
-  { key: "paused", label: "Paused" },
-  { key: "completed", label: "Completed" },
-  { key: "error", label: "Error" },
+const FILTERS: { key: "all" | Status; label: TranslationKey }[] = [
+  { key: "all", label: "all" },
+  { key: "downloading", label: "active" },
+  { key: "paused", label: "paused" },
+  { key: "completed", label: "completed" },
+  { key: "error", label: "error" },
 ];
 
 function Dashboard() {
-  const { downloads, pauseAll, resumeAll, externalUrl, clearExternalUrl } = useDDM();
+  const { downloads, pauseAll, resumeAll, externalUrl, clearExternalUrl, t } = useDDM();
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState<"all" | Status>("all");
   useEffect(() => {
@@ -60,7 +61,7 @@ function Dashboard() {
                 onClick={() => setFilter(f.key)}
                 className={`rounded-md px-3 py-1.5 text-sm ${filter === f.key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
               >
-                {f.label}
+                {t(f.label)}
               </button>
             ))}
           </div>
@@ -70,14 +71,14 @@ function Dashboard() {
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-muted-foreground hover:text-primary"
             >
               <Play className="h-4 w-4" />
-              Resume all
+              {t("resumeAll")}
             </button>
             <button
               onClick={pauseAll}
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-muted-foreground hover:text-warning"
             >
               <Pause className="h-4 w-4" />
-              Pause all
+              {t("pauseAll")}
             </button>
           </div>
         </div>
@@ -87,7 +88,7 @@ function Dashboard() {
           ))}
           {list.length === 0 && (
             <div className="rounded-xl border border-dashed border-border p-12 text-center text-muted-foreground">
-              No downloads here yet.
+              {t("noDownloads")}
             </div>
           )}
         </div>
