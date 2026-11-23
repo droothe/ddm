@@ -1093,19 +1093,18 @@ async fn remove_files(parts: &[PathBuf], merge_path: &Path) {
     }
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mut builder = tauri::Builder::default();
+    let builder = tauri::Builder::default();
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                if let Err(error) = window.set_focus() {
-                    eprintln!("Could not focus the existing DDM window: {error}");
-                }
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            if let Err(error) = window.set_focus() {
+                eprintln!("Could not focus the existing DDM window: {error}");
             }
-        }));
-    }
+        }
+    }));
 
     builder
         .manage(DownloadManager::default())
@@ -1122,11 +1121,11 @@ pub fn run() {
                 })
                 .build(),
         )
-        .setup(|app| {
+        .setup(|_app| {
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
-                app.deep_link().register_all()?;
+                _app.deep_link().register_all()?;
             }
             Ok(())
         })
