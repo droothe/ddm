@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createThreadSegments } from "@/lib/ddm-store";
+import { appendRecentSpeedSamples, createThreadSegments } from "@/lib/ddm-store";
 import { extractSharedUrl } from "@/hooks/useShareIntent";
 import { extractDownloadUrlFromDeepLink, isTauriRuntime } from "@/lib/downloadEngine";
 
@@ -74,5 +74,24 @@ describe("createThreadSegments", () => {
     expect(() => createThreadSegments(0, 1)).toThrow("valid file size");
     expect(() => createThreadSegments(10, 0)).toThrow("between 1 and 16");
     expect(() => createThreadSegments(10, 17)).toThrow("between 1 and 16");
+  });
+});
+
+describe("estimated download speed", () => {
+  it("averages samples over a four-second window", () => {
+    const first = appendRecentSpeedSamples([], 8 * 1024 * 1024, 10_000);
+    const second = appendRecentSpeedSamples(first.samples, 4 * 1024 * 1024, 12_000);
+    const third = appendRecentSpeedSamples(second.samples, 12 * 1024 * 1024, 13_000);
+
+    expect(third.average).toBeCloseTo(8 * 1024 * 1024);
+    expect(third.samples).toHaveLength(3);
+  });
+
+  it("drops samples older than four seconds", () => {
+    const first = appendRecentSpeedSamples([], 20 * 1024 * 1024, 10_000);
+    const second = appendRecentSpeedSamples(first.samples, 10 * 1024 * 1024, 14_001);
+
+    expect(second.average).toBeCloseTo(10 * 1024 * 1024);
+    expect(second.samples).toHaveLength(1);
   });
 });

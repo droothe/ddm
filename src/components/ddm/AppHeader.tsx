@@ -26,7 +26,7 @@ export function AppHeader({ onAdd }: { onAdd?: () => void }) {
           <Stat
             icon={<ArrowDown className="h-3.5 w-3.5" />}
             label={t("downloadSpeed")}
-            value={fmtSpeed(stats.down)}
+            value={fmtSpeed(stats.down, true)}
             accent
           />
           <Stat

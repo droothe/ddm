@@ -99,7 +99,7 @@ export function DownloadRow({ d }: { d: Download }) {
             />
           </div>
           <div className="mt-1.5 flex gap-4 text-xs font-mono text-muted-foreground">
-            <span>{d.status === "downloading" ? fmtSpeed(d.speed) : "0.00 MB/s"}</span>
+            <span>{d.status === "downloading" ? fmtSpeed(d.speed, true) : "0.00 MB/s"}</span>
             <span>
               {t("eta")}{" "}
               {d.status === "downloading" ? fmtEta(d.size - done, d.speed, settings.language) : "—"}

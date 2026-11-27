@@ -68,6 +68,37 @@ export interface DownloadItem {
 
 export type Download = DownloadItem;
 
+export interface SpeedSample {
+  at: number;
+  speed: number;
+}
+
+export function averageRecentSpeed(
+  samples: SpeedSample[],
+  nextSpeed: number,
+  now = Date.now(),
+  windowMs = 4000,
+): number {
+  const current = appendRecentSpeedSamples(samples, nextSpeed, now, windowMs);
+  return current.samples.length
+    ? current.samples.reduce((total, sample) => total + sample.speed, 0) / current.samples.length
+    : 0;
+}
+
+export function appendRecentSpeedSamples(
+  samples: SpeedSample[],
+  nextSpeed: number,
+  now = Date.now(),
+  windowMs = 4000,
+): { average: number; samples: SpeedSample[] } {
+  const safeSpeed = Number.isFinite(nextSpeed) ? Math.max(0, nextSpeed) : 0;
+  const recent = samples.filter((sample) => now - sample.at <= windowMs);
+  recent.push({ at: now, speed: safeSpeed });
+  const average =
+    recent.reduce((total, sample) => total + sample.speed, 0) / recent.length;
+  return { average, samples: recent };
+}
+
 export interface Settings {
   language: Language;
   defaultDir: string;
@@ -221,6 +252,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
   const resuming = useRef(new Set<string>());
   const retrying = useRef(new Set<string>());
   const publishing = useRef(new Set<string>());
+  const speedSamples = useRef(new Map<string, SpeedSample[]>());
 
   const updateDownload = useCallback((id: string, update: Partial<DownloadItem>) => {
     setDownloads((items) => items.map((item) => (item.id === id ? { ...item, ...update } : item)));
@@ -311,8 +343,26 @@ export function DDMProvider({ children }: { children: ReactNode }) {
               .finally(() => publishing.current.delete(item.id));
           }
         }
+        const shouldClearSpeed =
+          event.status === "paused" ||
+          event.status === "cancelled" ||
+          event.status === "completed" ||
+          event.status === "error";
+        let estimatedSpeed = 0;
+        if (shouldClearSpeed) {
+          speedSamples.current.delete(event.id);
+        } else {
+          const result = appendRecentSpeedSamples(
+            speedSamples.current.get(event.id) ?? [],
+            event.speed ?? 0,
+          );
+          speedSamples.current.set(event.id, result.samples);
+          estimatedSpeed = result.average;
+        }
         setDownloads((items) =>
-          items.map((item) => (item.id === event.id ? applyProgress(item, event) : item)),
+          items.map((item) =>
+            item.id === event.id ? applyProgress(item, event, estimatedSpeed) : item,
+          ),
         );
       }),
       listenForExternalDownloads((url) => {
@@ -354,6 +404,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
 
       slots -= 1;
       starting.current.add(item.id);
+      speedSamples.current.delete(item.id);
       updateDownload(item.id, { status: "downloading", speed: 0, errorMessage: "" });
       const shouldStart = retrying.current.delete(item.id) || !started.current.has(item.id);
       if (shouldStart) started.current.add(item.id);
@@ -436,6 +487,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       const item = downloads.find((download) => download.id === id);
       if (!item || (item.status !== "downloading" && item.status !== "queued")) return;
+      speedSamples.current.delete(id);
       updateDownload(id, { status: "paused", speed: 0 });
       if (item.status === "downloading") {
         void pauseDownload(id).catch((error: unknown) => {
@@ -453,6 +505,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
       if (!item.prepared) return;
       resuming.current.add(id);
       if (item.status === "error" && isTauriRuntime()) retrying.current.add(id);
+      speedSamples.current.delete(id);
       updateDownload(id, { status: "queued", speed: 0, errorMessage: "" });
     },
     [downloads, updateDownload],
@@ -460,6 +513,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
 
   const cancel = useCallback(
     (id: string) => {
+      speedSamples.current.delete(id);
       updateDownload(id, { status: "cancelled", speed: 0 });
       void cancelDownload(id).catch((error: unknown) => {
         updateDownload(id, { errorMessage: getErrorMessage(error) });
@@ -474,6 +528,7 @@ export function DDMProvider({ children }: { children: ReactNode }) {
       started.current.delete(id);
       resuming.current.delete(id);
       retrying.current.delete(id);
+      speedSamples.current.delete(id);
       const item = downloads.find((download) => download.id === id);
       if (item && item.status !== "completed" && item.status !== "cancelled") {
         void cancelDownload(id).catch((error: unknown) =>
@@ -565,12 +620,16 @@ export function DDMProvider({ children }: { children: ReactNode }) {
   return <DDMContext.Provider value={value}>{children}</DDMContext.Provider>;
 }
 
-function applyProgress(item: DownloadItem, event: EngineProgress): DownloadItem {
+function applyProgress(
+  item: DownloadItem,
+  event: EngineProgress,
+  estimatedSpeed = event.speed ?? 0,
+): DownloadItem {
   return {
     ...item,
     status: event.status ?? item.status,
     size: event.size && event.size > 0 ? event.size : item.size,
-    speed: event.speed ?? 0,
+    speed: estimatedSpeed,
     chunks: event.chunks?.length ? event.chunks : item.chunks,
     ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
   };
@@ -587,7 +646,8 @@ export function fmtBytes(bytes: number) {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / 1024).toFixed(0)} KB`;
 }
-export const fmtSpeed = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(2)} MB/s`;
+export const fmtSpeed = (bytes: number, estimated = false) =>
+  `${estimated ? "≈ " : ""}${(bytes / (1024 * 1024)).toFixed(2)} MB/s`;
 export function fmtEta(remaining: number, speed: number, language: Language = "en") {
   if (!speed) return "—";
   const seconds = Math.round(remaining / speed);
